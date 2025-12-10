@@ -98,16 +98,57 @@ void pcie_byte_test()
 	PCIe_Epilogue();
 }
 #define WORD_MEM_SIZE (32768)
-#define MMIO_ALU_in1   (16 * (WORD_MEM_SIZE - 1))
-#define MMIO_ALU_in2   (16 * (WORD_MEM_SIZE - 2))
-#define MMIO_ALU_out   (16 * (WORD_MEM_SIZE - 3))
-#define MMIO_ALU_start (16 * (WORD_MEM_SIZE - 4))
-#define MMIO_ALU_done  (16 * (WORD_MEM_SIZE - 5))
+#define MMIO_ALU_in1   (16 * (1))
+#define MMIO_ALU_in2   (16 * (2))
+#define MMIO_ALU_out   (16 * (3))
+#define MMIO_ALU_start (16 * (4))
+#define MMIO_ALU_done  (16 * (5))
 
 #include <unistd.h>
 
+
+void mm_alu_rdwr_test()
+{
+	PCIe_Prologue();
+	word one = 1;
+	word alu_in1 = 10;
+	word alu_in2 = 20;
+	word alu_out = 123;
+	word alu_done = 456;
+
+	PCIeWrite(&alu_in1, MMIO_ALU_in1, sizeof(alu_in1));
+	PCIeWrite(&alu_in2, MMIO_ALU_in2, sizeof(alu_in2));
+	PCIeWrite(&alu_out, MMIO_ALU_out, sizeof(alu_out));
+	PCIeWrite(&alu_done, MMIO_ALU_done, sizeof(alu_done));
+
+	// word alu_done = 0;
+	// while(!alu_done)
+	// {
+	// 	PCIeRead(&alu_done, MMIO_ALU_done, sizeof(alu_done));
+	// }
+	alu_in1 = 0;
+	alu_in2 = 0;
+	alu_out = 0;
+	alu_done = 0;
+
+	std::cout << "mm alu is DONE!\n";
+	PCIeRead(&alu_in1, MMIO_ALU_in1, sizeof(alu_in1));
+	PCIeRead(&alu_in2, MMIO_ALU_in2, sizeof(alu_in2));
+	PCIeRead(&alu_out, MMIO_ALU_out, sizeof(alu_out));
+	PCIeRead(&alu_done, MMIO_ALU_done, sizeof(alu_done));
+
+	printf("alu_in1 = %llu\n", alu_in1);
+	printf("alu_in2 = %llu\n", alu_in2);
+	printf("alu_out = %llu\n", alu_out);
+	printf("alu_done = %llu\n", alu_done);
+
+	PCIe_Epilogue();
+}
+
 int main(int argc, char* argv[])
 {
+	mm_alu_rdwr_test();
+	return 0;
 	// pcie_rdwr_test();
 	// pcie_byte_test();
 
@@ -116,28 +157,27 @@ int main(int argc, char* argv[])
 	word alu_in1 = 10;
 	word alu_in2 = 20;
 	word alu_out = 0;
-	word alu_start = 123;
 
 	PCIeWrite(&alu_in1, MMIO_ALU_in1, sizeof(alu_in1));
 	PCIeWrite(&alu_in2, MMIO_ALU_in2, sizeof(alu_in2));
 	PCIeWrite(&one, MMIO_ALU_start, sizeof(one));
 
-	// word alu_done = 0;
-	// while(!alu_done)
-	// {
-	// 	PCIeRead(&alu_done, MMIO_ALU_done, sizeof(alu_done));
-	// }
-
+	word alu_done = 0;
+	while(!alu_done)
+	{
+		PCIeRead(&alu_done, MMIO_ALU_done, sizeof(alu_done));
+	}
 	std::cout << "mm alu is DONE!\n";
+
+	alu_in1 = 0;
+	alu_in2 = 0;
 	PCIeRead(&alu_in1, MMIO_ALU_in1, sizeof(alu_in1));
 	PCIeRead(&alu_in2, MMIO_ALU_in2, sizeof(alu_in2));
 	PCIeRead(&alu_out, MMIO_ALU_out, sizeof(alu_out));
-	PCIeRead(&alu_start, MMIO_ALU_start, sizeof(alu_start));
 
 	printf("alu_in1 = %llu\n", alu_in1);
 	printf("alu_in2 = %llu\n", alu_in2);
 	printf("alu_out = %llu\n", alu_out);
-	printf("alu_start = %llu\n", alu_start);
 
 	PCIe_Epilogue();
 
