@@ -4,3 +4,8 @@
 /input_images
 /.vscode
 /build
+/conv-hw/PCIe_Fundamental/incremental_db
+/conv-hw/PCIe_Fundamental/db
+/conv-hw/PCIe_Fundamental/.qsys_edit
+/conv-hw/PCIe_Fundamental/demo_batch
+/conv-hw/PCIe_Fundamental/output_files
