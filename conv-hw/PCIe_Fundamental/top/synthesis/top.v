@@ -260,8 +260,25 @@ module top (
 		.freeze      (1'b0)                                            // (terminated)
 	);
 	assign mem_write_en = mm_interconnect_0_onchip_memory2_s1_chipselect & mm_interconnect_0_onchip_memory2_s1_write;
-	assign mem_read_en = mm_interconnect_1_onchip_memory2_s2_chipselect;
-	assign mm_interconnect_1_onchip_memory2_s2_readdata = (`MMIO_rden) ? mmio_readdata : onchip_memory2_readdata;
+	assign mem_read_en = ~mem_write_en;
+	// assign mm_interconnect_1_onchip_memory2_s2_readdata = (`MMIO_rden) ? mmio_readdata : onchip_memory2_readdata;
+	assign mm_interconnect_1_onchip_memory2_s2_readdata = mmio_readdata;
+	assign mm_interconnect_0_onchip_memory2_s1_readdata = 128'hFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
+
+
+	// assign mem_read_en = mm_interconnect_1_onchip_memory2_s2_chipselect;
+	// reg r_MMIO_rden;
+	// always @(posedge pcie_256_hip_avmm_coreclkout_clk) begin
+	// 	if (rst_controller_001_reset_out_reset) begin
+	// 		r_MMIO_rden <= 1'b0;
+	// 	end
+	// 	else begin
+	// 		r_MMIO_rden <= `MMIO_rden; 
+	// 	end
+	// end
+	// assign mm_interconnect_1_onchip_memory2_s2_readdata = (r_MMIO_rden) ? mmio_readdata : onchip_memory2_readdata;
+
+
 
 	altpcie_256_hip_avmm_hwtcl #(
 		.INTENDED_DEVICE_FAMILY                   ("Cyclone V"),

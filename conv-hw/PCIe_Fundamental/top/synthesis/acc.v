@@ -2,28 +2,21 @@
 `define MEM_SIZE (32768)
 
 `define CPU_AddressBus ((mem_write_en) ? mm_interconnect_0_onchip_memory2_s1_address	  : mm_interconnect_1_onchip_memory2_s2_address)
-`define MMIO_rden (mem_read_en  && (((`MEM_SIZE - 1024) <= `CPU_AddressBus) && (`CPU_AddressBus <= (`MEM_SIZE - 1))))
-`define MMIO_wren (mem_write_en && (((`MEM_SIZE - 1024) <= `CPU_AddressBus) && (`CPU_AddressBus <= (`MEM_SIZE - 1))))
+// `define MMIO_rden (mem_read_en  && (((`MEM_SIZE - 1024) <= `CPU_AddressBus) && (`CPU_AddressBus <= (`MEM_SIZE - 1))))
+`define MMIO_rden (mem_read_en  && (((1) <= `CPU_AddressBus) && (`CPU_AddressBus <= (1024))))
+// `define MMIO_wren (mem_write_en && (((`MEM_SIZE - 1024) <= `CPU_AddressBus) && (`CPU_AddressBus <= (`MEM_SIZE - 1))))
+`define MMIO_wren (mem_write_en && (((1) <= `CPU_AddressBus) && (`CPU_AddressBus <= (1024))))
 
-`define MMIO_ALU_in1_rden   (mem_read_en  && (`CPU_AddressBus == (`MEM_SIZE - 1)))
-`define MMIO_ALU_in1_wren   (mem_write_en && (`CPU_AddressBus == (`MEM_SIZE - 1)))
-`define MMIO_ALU_in2_rden   (mem_read_en  && (`CPU_AddressBus == (`MEM_SIZE - 2)))
-`define MMIO_ALU_in2_wren   (mem_write_en && (`CPU_AddressBus == (`MEM_SIZE - 2)))
-`define MMIO_ALU_out_rden   (mem_read_en  && (`CPU_AddressBus == (`MEM_SIZE - 3)))
-`define MMIO_ALU_out_wren   (mem_write_en && (`CPU_AddressBus == (`MEM_SIZE - 3)))
-`define MMIO_ALU_start_rden (mem_read_en  && (`CPU_AddressBus == (`MEM_SIZE - 4)))
-`define MMIO_ALU_start_wren (mem_write_en && (`CPU_AddressBus == (`MEM_SIZE - 4)))
-`define MMIO_ALU_done_rden  (mem_read_en  && (`CPU_AddressBus == (`MEM_SIZE - 5)))
-`define MMIO_ALU_done_wren  (mem_write_en && (`CPU_AddressBus == (`MEM_SIZE - 5)))
-
-
-reg [24:0] clkdiv;
-always@(posedge clk_clk or posedge rst) begin
-    if (rst)
-        clkdiv <= 0;
-    else
-        clkdiv <= clkdiv + 1'b1;
-end
+`define MMIO_ALU_in1_rden   (mem_read_en  && (`CPU_AddressBus == (1)))
+`define MMIO_ALU_in1_wren   (mem_write_en && (`CPU_AddressBus == (1)))
+`define MMIO_ALU_in2_rden   (mem_read_en  && (`CPU_AddressBus == (2)))
+`define MMIO_ALU_in2_wren   (mem_write_en && (`CPU_AddressBus == (2)))
+`define MMIO_ALU_out_rden   (mem_read_en  && (`CPU_AddressBus == (3)))
+`define MMIO_ALU_out_wren   (mem_write_en && (`CPU_AddressBus == (3)))
+`define MMIO_ALU_start_rden (mem_read_en  && (`CPU_AddressBus == (4)))
+`define MMIO_ALU_start_wren (mem_write_en && (`CPU_AddressBus == (4)))
+`define MMIO_ALU_done_rden  (mem_read_en  && (`CPU_AddressBus == (5)))
+`define MMIO_ALU_done_wren  (mem_write_en && (`CPU_AddressBus == (5)))
 
 
 wire clk;
@@ -33,7 +26,6 @@ wire `BIT_WIDTH CPUDataBusOut;
 reg `BIT_WIDTH MMIODataBus;
 //------------------------------------------------
 // mm_alu
-// 50 * 1000 cycle to get a delay of 5 sec
 reg `BIT_WIDTH alu_in1, alu_in2, alu_out;
 reg `BIT_WIDTH alu_start;
 reg `BIT_WIDTH alu_done;
@@ -49,7 +41,7 @@ reg `BIT_WIDTH alu_counter;
 
 
 // MMIO control circuit
-always@(posedge clk or posedge rst) begin
+always@(negedge clk or posedge rst) begin
 	if (rst) begin
 	end
 	else if (`MMIO_rden) begin
