@@ -12,16 +12,60 @@
 #include <deque>
 #include <thread>
 #include "fftw-3.3.10/fftw-3.3.10/api/fftw3.h"
+using namespace cv;
+
+#define KERNEL_WIDTH 3
+#define KERNEL_HEIGHT 3
+#define KERNEL_DEPTH 3
 
 bool pseudo = false;
 bool verbose = false;
 
+typedef struct {
+    int width;
+    int height;
+    int max_val;
+    unsigned char* data;
+} PPMImage;
+
+int KERNEL2D_EDGE_DETECTOR[KERNEL_HEIGHT][KERNEL_WIDTH] = {
+    {-1, -2, -1},
+    { 0,  0,  0},
+    { 1,  2,  1},
+};
+
+int KERNEL2D_IDENTITY[KERNEL_HEIGHT][KERNEL_WIDTH] = {
+    {0, 0, 0},
+    {0, 1, 0},
+    {0, 0, 0},
+};
+auto k2d = KERNEL2D_EDGE_DETECTOR;
+
+float KERNEL3D_EDGE_DETECTOR[KERNEL_DEPTH][KERNEL_HEIGHT][KERNEL_WIDTH] = {
+    {
+        {-1.0f, -2.0f, -1.0f},
+        {-2.0f, -4.0f, -2.0f},
+        {-1.0f, -2.0f, -1.0f}
+    },
+    {
+        {0.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 0.0f}
+    },
+    {
+        {1.0f, 2.0f, 1.0f},
+        {2.0f, 4.0f, 2.0f},
+        {1.0f, 2.0f, 1.0f}
+    }
+};
+auto k3d = KERNEL3D_EDGE_DETECTOR;
+
+// misc funcs
 clock_t Clocker;
 void StartClock()
 {
     Clocker = clock();
 }
-
 double EndClock(bool Verbose = false)
 {
     clock_t t = clock() - Clocker;
@@ -34,20 +78,123 @@ double EndClock(bool Verbose = false)
     std::cout.precision(6);
     return TimeTaken;
 }
-
-typedef struct {
-    int width;
-    int height;
-    int max_val;
-    unsigned char* data;
-} PPMImage;
-
 float clampf(float val) {
     if (val < 0.0f) return 0.0f;
     if (val > 255.0f) return 255.0f;
     return val;
 }
+unsigned char clamp(int val) {
+    if (val < 0) return 0;
+    if (val > 255) return 255;
+    return (unsigned char)val;
+}
 
+void PadImage(PPMImage& img, int padH, int padW, bool PadZero)
+{
+    if (PadZero)
+    {
+        // pad with zeros on the border
+        int newWidth = img.width + 2 * padW;
+        int newHeight = img.height + 2 * padH;
+        unsigned char* newData = (unsigned char*)malloc(newWidth * newHeight * 3);
+        memset(newData, 0, newWidth * newHeight * 3);
+        for (int y = 0; y < img.height; y++) {
+            for (int x = 0; x < img.width; x++) {
+                for (int c = 0; c < 3; c++) {
+                    newData[3 * ((y + padH) * newWidth + (x + padW)) + c] = img.data[3 * (y * img.width + x) + c];
+                }
+            }
+        }
+    }
+    else
+    {
+        int newWidth = img.width + 2 * padW;
+        int newHeight = img.height + 2 * padH;
+        unsigned char* newData = (unsigned char*)malloc(newWidth * newHeight * 3);
+        for (int y = 0; y < newHeight; y++) {
+            for (int x = 0; x < newWidth; x++) {
+                int srcX = std::clamp(x - padW, 0, img.width - 1);
+                int srcY = std::clamp(y - padH, 0, img.height - 1);
+                for (int c = 0; c < 3; c++) {
+                    newData[3 * (y * newWidth + x) + c] = img.data[3 * (srcY * img.width + srcX) + c];
+                }
+            }
+        }
+        free(img.data);
+        img.data = newData;
+        img.width = newWidth;
+        img.height = newHeight;
+    }
+}
+
+// 1d conv
+template<class T, class V>
+void conv1d(T* a, int alen, V* b, int blen, T* c)
+{
+    for (size_t i = 0; i < alen; i++) {
+        for (size_t j = 0; j < blen; j++) {
+            c[i + j] += a[i] * b[j];
+        }
+    }
+}
+template<class T, class V>
+void conv2d(T* input, V k[KERNEL_HEIGHT][KERNEL_WIDTH], T* output, int w, int h, int marginx, int marginy, bool ClampAndAbs)
+{
+    for (int y = marginy; y < h - marginy; y++) {
+        for (int x = marginx; x < w - marginx; x++) {
+            V r_sum = 0, g_sum = 0, b_sum = 0;
+            for (int ky = 0; ky < KERNEL_HEIGHT; ky++) {
+                for (int kx = 0; kx < KERNEL_WIDTH; kx++) {
+                    int px = x + kx - marginx;
+                    int py = y + ky - marginy;
+                    if (!(px < 0 || px >= w || py < 0 || py >= h))
+                    {
+                        V e = k[ky][kx];
+                        r_sum += input[(3 * (py * w + px)) + 0] * e;
+                        g_sum += input[(3 * (py * w + px)) + 1] * e;
+                        b_sum += input[(3 * (py * w + px)) + 2] * e;
+                    }
+                }
+            }
+            output[(3 * ((y - marginy) * w + (x - marginx))) + 0] = (!ClampAndAbs) ? r_sum : clamp(abs(r_sum));
+            output[(3 * ((y - marginy) * w + (x - marginx))) + 1] = (!ClampAndAbs) ? g_sum : clamp(abs(g_sum));
+            output[(3 * ((y - marginy) * w + (x - marginx))) + 2] = (!ClampAndAbs) ? b_sum : clamp(abs(b_sum));
+        }
+    }
+}
+
+template<class T>
+void ImageConvKernel(PPMImage& input, T* k, PPMImage& output)
+{
+    int padH = KERNEL_HEIGHT / 2;
+    int padW = KERNEL_WIDTH / 2;
+    PadImage(input, padH, padW, false);
+    output.width = input.width;
+    output.height = input.height;
+    free(output.data);
+    output.data = (unsigned char*)malloc(output.width * output.height * 3);
+    memset(output.data, 0, output.width * output.height * 3);
+
+    conv2d(input.data, k, output.data, input.width, input.height, padW, padH, true);
+
+    // unpad the output PPMImage
+    PPMImage unpadded;
+    unpadded.width = output.width - 2 * padW;
+    unpadded.height = output.height - 2 * padH;
+    unpadded.max_val = output.max_val;
+    unpadded.data = (unsigned char*)malloc(unpadded.width * unpadded.height * 3);
+    for (int y = 0; y < unpadded.height; y++) {
+        for (int x = 0; x < unpadded.width; x++) {
+            for (int c = 0; c < 3; c++) {
+                unpadded.data[3 * (y * unpadded.width + x) + c] =
+                    output.data[3 * ((y) * output.width + (x)) + c];
+            }
+        }
+    }
+    free(output.data);
+    output = unpadded;
+}
+// PPM functions
 PPMImage* read_ppm(const char* filename) {
     FILE* fp = fopen(filename, "rb");
     if (!fp) {
@@ -81,15 +228,8 @@ PPMImage* read_ppm(const char* filename) {
     fclose(fp);
     return img;
 }
-
-void invert_colors(PPMImage* img) {
-    int size = img->width * img->height * 3;
-    for (int i = 0; i < size; i++) {
-        img->data[i] = 255 - img->data[i];
-    }
-}
-
 int write_ppm(const char* filename, PPMImage* img) {
+
     FILE* fp = fopen(filename, "wb");
     if (!fp) {
         perror("Cannot write to file");
@@ -100,139 +240,47 @@ int write_ppm(const char* filename, PPMImage* img) {
     fclose(fp);
     return 1;
 }
-
-int save_ppm(const char* filename, unsigned char* data, int width, int height) {
-    FILE* fp = fopen(filename, "wb");
-    if (!fp) {
-        perror("Cannot write PPM");
-        return 0;
+void WriteColoredPPM(const char* filename, int width, int height, uint32_t color) {
+    PPMImage img;
+    img.width = width;
+    img.height = height;
+    img.max_val = 255;
+    img.data = (unsigned char*)malloc(width * height * 3);
+    
+    for (int i = 0; i < width * height; i++) {
+        img.data[3 * i + 0] = (color >> (8 * 3)) & 0xFF;
+        img.data[3 * i + 1] = (color >> (8 * 2)) & 0xFF;
+        img.data[3 * i + 2] = (color >> (8 * 1)) & 0xFF;
     }
 
-    fprintf(fp, "P6\n%d %d\n255\n", width, height);
-    fwrite(data, 3, width * height, fp);  
-    fclose(fp);
-    return 1;
-}
-
-unsigned char clamp(int val) {
-    if (val < 0) return 0;
-    if (val > 255) return 255;
-    return (unsigned char)val;
-}
-
-#define KERNEL_WIDTH 3
-#define KERNEL_HEIGHT 3
-#define KERNEL_DEPTH 3
-
-int KERNEL2D_EDGE_DETECTOR[KERNEL_HEIGHT][KERNEL_WIDTH] = {
-    {-1, -2, -1},
-    { 0,  0,  0},
-    { 1,  2,  1},
-};
-
-int KERNEL2D_IDENTITY[KERNEL_HEIGHT][KERNEL_WIDTH] = {
-    {0, 0, 0},
-    {0, 1, 0},
-    {0, 0, 0},
-};
-
-auto k2d = KERNEL2D_EDGE_DETECTOR;
-
-void PadImage(PPMImage& img, int padH, int padW)
-{
-#if 0
-    // pad with zeros on the border
-    int newWidth = img.width + 2 * padW;
-    int newHeight = img.height + 2 * padH;
-    unsigned char* newData = (unsigned char*)malloc(newWidth * newHeight * 3);
-    memset(newData, 0, newWidth * newHeight * 3);
-    for (int y = 0; y < img.height; y++) {
-        for (int x = 0; x < img.width; x++) {
-            for (int c = 0; c < 3; c++) {
-                newData[3 * ((y + padH) * newWidth + (x + padW)) + c] = img.data[3 * (y * img.width + x) + c];
-            }
-        }
+    if (!write_ppm(filename, &img)) {
+        std::cerr << "Failed to write random PPM image.\n";
     }
-#else
-    int newWidth = img.width + 2 * padW;
-    int newHeight = img.height + 2 * padH;
-    unsigned char* newData = (unsigned char*)malloc(newWidth * newHeight * 3);
-    for (int y = 0; y < newHeight; y++) {
-        for (int x = 0; x < newWidth; x++) {
-            int srcX = std::clamp(x - padW, 0, img.width - 1);
-            int srcY = std::clamp(y - padH, 0, img.height - 1);
-            for (int c = 0; c < 3; c++) {
-                newData[3 * (y * newWidth + x) + c] = img.data[3 * (srcY * img.width + srcX) + c];
-            }
-        }
-    }
+    
     free(img.data);
-    img.data = newData;
-    img.width = newWidth;
-    img.height = newHeight;
-#endif
 }
 
-void conv2d(PPMImage& input, PPMImage& output)
+void fftw()
 {
-    int padH = KERNEL_HEIGHT / 2;
-    int padW = KERNEL_WIDTH / 2;
-    PadImage(input, padH, padW);
-    output.width = input.width;
-    output.height = input.height;
-    free(output.data);
-    output.data = (unsigned char*)malloc(output.width * output.height * 3);
-    memset(output.data, 0, output.width * output.height * 3);
-    for (int y = padH; y < input.height - padH; y++) {
-        for (int x = padW; x < input.width - padW; x++) {
-            int r_sum = 0, g_sum = 0, b_sum = 0;
-            for (int ky = 0; ky < KERNEL_HEIGHT; ky++) {
-                for (int kx = 0; kx < KERNEL_WIDTH; kx++) {
-                    int px = x + kx - padW;
-                    int py = y + ky - padH;
-                    if (!(px < 0 || px >= input.width || py < 0 || py >= input.height))
-                    {
-                        int k = k2d[ky][kx];
-                        r_sum += input.data[(3 * (py * input.width + px)) + 0] * k;
-                        g_sum += input.data[(3 * (py * input.width + px)) + 1] * k;
-                        b_sum += input.data[(3 * (py * input.width + px)) + 2] * k;
-                    }
-                }
-            }
-            output.data[(3 * ((y - padH) * input.width + (x - padW))) + 0] = clamp(abs(r_sum));
-            output.data[(3 * ((y - padH) * input.width + (x - padW))) + 1] = clamp(abs(g_sum));
-            output.data[(3 * ((y - padH) * input.width + (x - padW))) + 2] = clamp(abs(b_sum));
-        }
-    }
-    // unpad the output PPMImage
-    PPMImage unpadded;
-    unpadded.width = output.width - 2 * padW;
-    unpadded.height = output.height - 2 * padH;
-    unpadded.max_val = output.max_val;
-    unpadded.data = (unsigned char*)malloc(unpadded.width * unpadded.height * 3);
-    for (int y = 0; y < unpadded.height; y++) {
-        for (int x = 0; x < unpadded.width; x++) {
-            for (int c = 0; c < 3; c++) {
-                unpadded.data[3 * (y * unpadded.width + x) + c] =
-                    output.data[3 * ((y) * output.width + (x)) + c];
-            }
-        }
-    }
-    free(output.data);
-    output = unpadded;
-}
+    double *in;
+    fftw_complex *out;
+    int N = 16;
+    in = (double*) fftw_malloc(sizeof(double) * N);
+    in[0] = 1.0;
+    out = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * N);
+    fftw_plan p = fftw_plan_dft_r2c_1d(N, in, out, FFTW_ESTIMATE);
 
-std::vector<int> conv1d(std::vector<int>& a, std::vector<int>& b)
-{
-    std::vector<int> result(a.size() + b.size() - 1, 0);
-    for (size_t i = 0; i < a.size(); i++) {
-        for (size_t j = 0; j < b.size(); j++) {
-            result[i + j] += a[i] * b[j];
-        }
-    }
-    return result;
-}
+    fftw_execute(p);
 
+    fftw_destroy_plan(p);
+
+    for (int i = 0; i < N; i++) {
+        std::cout << "out[" << i << "] = " << out[i][0] << " + " << out[i][1] << "i\n";
+    }
+
+    fftw_free(in);
+    fftw_free(out);
+}
 void fftw_conv2d(const PPMImage* input, PPMImage* output) {
     int H = input->height;
     int W = input->width;
@@ -320,8 +368,22 @@ void fftw_conv2d(const PPMImage* input, PPMImage* output) {
         fftw_free(imgPadded); fftw_free(kerPadded); fftw_free(result);
     }
 }
-
-void HandlePNG(const char* input_png, const char* output_png) {
+template<class T>
+void HandlePPM(const char* input_ppm, T* k, const char* output_ppm)
+{
+    PPMImage* img = read_ppm(input_ppm);
+    if (!img) exit(1);
+    PPMImage out;
+    out.width = img->width;
+    out.height = img->height;
+    out.max_val = 255;
+    out.data = (unsigned char*)malloc(img->width * img->height * 3);
+    if (!out.data) exit(1);
+    ImageConvKernel(*img, k, out);
+    write_ppm(output_ppm, &out);
+}
+template<class T>
+void HandlePNG(const char* input_png, T* k, const char* output_png) {
     int width, height, channels;
     unsigned char* img = stbi_load(input_png, &width, &height, &channels, 3);
     if (!img) {
@@ -336,20 +398,11 @@ void HandlePNG(const char* input_png, const char* output_png) {
     ppm_img.data = img;
 
     PPMImage out;
-    if (pseudo)
-    {
-        std::cout << "running pseudo conv2d\n";
-        out.width = width;
-        out.height = height;
-        out.max_val = 255;
-        out.data = (unsigned char*)malloc(width * height * 3);
-        conv2d(ppm_img, out);
-    }
-    else
-    {
-        std::cout << "running fftw conv2d\n";
-        fftw_conv2d(&ppm_img, &out);
-    }
+    out.width = width;
+    out.height = height;
+    out.max_val = 255;
+    out.data = (unsigned char*)malloc(width * height * 3);
+    ImageConvKernel(ppm_img, k, out);
     if (!stbi_write_png(output_png, out.width, out.height, 3, out.data, out.width * 3)) {
         std::cerr << "Failed to write PNG: " << stbi_failure_reason() << "\n";
         exit(1);
@@ -358,84 +411,6 @@ void HandlePNG(const char* input_png, const char* output_png) {
     stbi_image_free(img);
 }
 
-void WriteColoredPPM(const char* filename, int width, int height, uint32_t color) {
-    PPMImage img;
-    img.width = width;
-    img.height = height;
-    img.max_val = 255;
-    img.data = (unsigned char*)malloc(width * height * 3);
-    
-    for (int i = 0; i < width * height; i++) {
-        img.data[3 * i + 0] = (color >> (8 * 3)) & 0xFF;
-        img.data[3 * i + 1] = (color >> (8 * 2)) & 0xFF;
-        img.data[3 * i + 2] = (color >> (8 * 1)) & 0xFF;
-    }
-
-    if (!write_ppm(filename, &img)) {
-        std::cerr << "Failed to write random PPM image.\n";
-    }
-    
-    free(img.data);
-}
-
-void HandlePPM(const char* input_ppm, const char* output_ppm)
-{
-    PPMImage* img = read_ppm(input_ppm);
-    if (!img) exit(1);
-    PPMImage out;
-    out.width = img->width;
-    out.height = img->height;
-    out.max_val = 255;
-    out.data = (unsigned char*)malloc(img->width * img->height * 3);
-    if (!out.data) exit(1);
-    conv2d(*img, out);
-    write_ppm(output_ppm, &out);
-}
-
-using namespace cv;
-
-void conv2d(const cv::Mat& input, cv::Mat& output) {
-    output = Mat::zeros(input.size(), input.type());
-
-    for (int y = 1; y < input.rows - 1; y++) {
-        for (int x = 1; x < input.cols - 1; x++) {
-            int r_sum = 0, g_sum = 0, b_sum = 0;
-            for (int ky = 0; ky < KERNEL_HEIGHT; ky++) {
-                for (int kx = 0; kx < KERNEL_WIDTH; kx++) {
-                    Vec3b pixel = input.at<Vec3b>(y + ky - 1, x + kx - 1);
-                    int k = k2d[ky][kx];
-                    r_sum += pixel[2] * k;
-                    g_sum += pixel[1] * k;
-                    b_sum += pixel[0] * k;
-                }
-            }
-            output.at<Vec3b>(y, x)[0] = std::clamp(std::abs(b_sum), 0, 255);
-            output.at<Vec3b>(y, x)[1] = std::clamp(std::abs(g_sum), 0, 255);
-            output.at<Vec3b>(y, x)[2] = std::clamp(std::abs(r_sum), 0, 255);
-        }
-    }
-}
-
-float KERNEL3D_EDGE_DETECTOR[KERNEL_DEPTH][KERNEL_HEIGHT][KERNEL_WIDTH] = {
-    {
-        {-1.0f, -2.0f, -1.0f},
-        {-2.0f, -4.0f, -2.0f},
-        {-1.0f, -2.0f, -1.0f}
-    },
-    {
-        {0.0f, 0.0f, 0.0f},
-        {0.0f, 0.0f, 0.0f},
-        {0.0f, 0.0f, 0.0f}
-    },
-    {
-        {1.0f, 2.0f, 1.0f},
-        {2.0f, 4.0f, 2.0f},
-        {1.0f, 2.0f, 1.0f}
-    }
-};
-
-auto k3d = KERNEL3D_EDGE_DETECTOR;
-float* k3dptr = &KERNEL3D_EDGE_DETECTOR[0][0][0];
 
 void HandleMP4_2D(const char* input_path, const char* output_path)
 {
@@ -469,8 +444,24 @@ void HandleMP4_2D(const char* input_path, const char* output_path)
         if (frame.empty())
             break;
 
-        conv2d(frame, filtered);
-
+        filtered = Mat::zeros(frame.size(), frame.type());
+        for (int y = 1; y < frame.rows - 1; y++) {
+            for (int x = 1; x < frame.cols - 1; x++) {
+                int r_sum = 0, g_sum = 0, b_sum = 0;
+                for (int ky = 0; ky < KERNEL_HEIGHT; ky++) {
+                    for (int kx = 0; kx < KERNEL_WIDTH; kx++) {
+                        Vec3b pixel = frame.at<Vec3b>(y + ky - 1, x + kx - 1);
+                        int k = k2d[ky][kx];
+                        r_sum += pixel[2] * k;
+                        g_sum += pixel[1] * k;
+                        b_sum += pixel[0] * k;
+                    }
+                }
+                filtered.at<Vec3b>(y, x)[0] = std::clamp(std::abs(b_sum), 0, 255);
+                filtered.at<Vec3b>(y, x)[1] = std::clamp(std::abs(g_sum), 0, 255);
+                filtered.at<Vec3b>(y, x)[2] = std::clamp(std::abs(r_sum), 0, 255);
+            }
+        }
         writer.write(filtered);
     }
     EndClock(true);
@@ -479,7 +470,6 @@ void HandleMP4_2D(const char* input_path, const char* output_path)
     writer.release();
     if (verbose) std::cout << "Output saved to " << output_path << "\n";
 }
-
 void HandleMP4_3D(const char* input_path, const char* output_path)
 {
     VideoCapture cap(input_path);
@@ -556,7 +546,6 @@ void HandleMP4_3D(const char* input_path, const char* output_path)
 
     if (verbose) std::cout << "Output saved to " << output_path << "\n";
 }
-
 void HandleMP4_3D_RGB(const char* input_path, const char* output_path)
 {
     VideoCapture cap(input_path);
@@ -638,7 +627,6 @@ void HandleMP4_3D_RGB(const char* input_path, const char* output_path)
 
     if (verbose) std::cout << "Output saved to " << output_path << "\n";
 }
-
 void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
 {
     VideoCapture cap(input_path);
@@ -765,27 +753,6 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
 }
 
 
-void fftw()
-{
-    double *in;
-    fftw_complex *out;
-    int N = 16;
-    in = (double*) fftw_malloc(sizeof(double) * N);
-    in[0] = 1.0;
-    out = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * N);
-    fftw_plan p = fftw_plan_dft_r2c_1d(N, in, out, FFTW_ESTIMATE);
-
-    fftw_execute(p);
-
-    fftw_destroy_plan(p);
-
-    for (int i = 0; i < N; i++) {
-        std::cout << "out[" << i << "] = " << out[i][0] << " + " << out[i][1] << "i\n";
-    }
-
-    fftw_free(in);
-    fftw_free(out);
-}
 
 void usage(const char* prog_name)
 {
@@ -860,11 +827,11 @@ int main(int argc, char* argv[])
     const char* extension = strrchr(input_path, '.');
     if (strcmp(extension, ".ppm") == 0)
     {
-        HandlePPM(input_path, output_path);
+        HandlePPM(input_path, k2d, output_path);
     }
     else if (strcmp(extension, ".png") == 0) 
     {
-        HandlePNG(input_path, output_path);
+        HandlePNG(input_path, k2d, output_path);
     }
     else if (strcmp(extension, ".mp4") == 0)
     {
