@@ -182,6 +182,7 @@ void ImageConvKernel(PPMImage& input, T* k, PPMImage& output)
     unpadded.width = output.width - 2 * padW;
     unpadded.height = output.height - 2 * padH;
     unpadded.max_val = output.max_val;
+    unpadded.channels = cs;
     unpadded.data = (unsigned char*)malloc(unpadded.width * unpadded.height * cs);
     for (int y = 0; y < unpadded.height; y++) {
         for (int x = 0; x < unpadded.width; x++) {
