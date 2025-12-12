@@ -161,7 +161,34 @@ void conv2d(T* input, V k[KERNEL_HEIGHT][KERNEL_WIDTH], T* output, int w, int h,
         }
     }
 }
-
+template<class T, class V>
+void conv3d(T* input, V k[KERNEL_DEPTH][KERNEL_HEIGHT][KERNEL_WIDTH], T* output, int w, int h, int d, int marginx, int marginy, int marginz, int channels, bool ClampAndAbs)
+{
+    for (int z = marginz; z < d - marginz; z++) {
+        for (int y = marginy; y < h - marginy; y++) {
+            for (int x = marginx; x < w - marginx; x++) {
+                std::vector<V>cs(channels);
+                for (int kz = 0; kz < KERNEL_DEPTH; kz++) {
+                    for (int ky = 0; ky < KERNEL_HEIGHT; ky++) {
+                        for (int kx = 0; kx < KERNEL_WIDTH; kx++) {
+                            int px = x + kx - (KERNEL_WIDTH / 2);
+                            int py = y + ky - (KERNEL_HEIGHT / 2);
+                            int pz = z + kz - (KERNEL_DEPTH / 2);
+                            if (!(px < 0 || px >= w || py < 0 || py >= h || pz < 0 || pz >= h))
+                            {
+                                V e = k[kz][ky][kx];
+                                for (int i = 0; i < channels; i++)
+                                    cs[i] += input[(channels * (pz * w * h + py * w + px)) + i] * e;
+                            }
+                        }
+                    }
+                }
+                for (int i = 0; i < channels; i++)
+                    output[(channels * ((z - marginz) * w * h + (y - marginy) * w + (x - marginx))) + i] = (!ClampAndAbs) ? cs[i] : clamp(abs(cs[i]));
+            }
+        }
+    }
+}
 template<class T>
 void ImageConvKernel(PPMImage& input, T* k, PPMImage& output)
 {
@@ -810,6 +837,70 @@ void test_conv2d()
         for (int j = 0; j < 5; j++)
             std::cout << out[i][j] << " ";
         std::cout << "\n";
+    }
+}
+
+void test_conv3d()
+{
+    const int w = 5, h = 5, d = 5;
+    int in[d][h][w];
+    int k[KERNEL_DEPTH][KERNEL_HEIGHT][KERNEL_WIDTH] = {
+        {
+            {0, 0, 0},
+            {0, 0, 0},
+            {0, 0, 0},
+        },
+        {
+            {0, 0, 0},
+            {0, 1, 0},
+            {0, 0, 0},
+        },
+        {
+            {0, 0, 0},
+            {0, 0, 0},
+            {0, 0, 0},
+        },
+    };
+
+    int out[d][h][w];
+    memset(out, 0, sizeof(int) * w * h * d);
+    for (int z = 0; z < d; z++)
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                in[z][y][x] = z * w * h + y * w + x + 1;
+
+    std::cout << "in: \n";
+    for (int z = 0; z < d; z++) {
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                std::cout << in[z][y][x] << " ";
+            }
+            std::cout << "\n";
+        }
+        std::cout << "\n---------------------------------\n";
+    }
+    std::cout << "out: \n";
+    for (int z = 0; z < d; z++) {
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                std::cout << out[z][y][x] << " ";
+            }
+            std::cout << "\n";
+        }
+        std::cout << "\n---------------------------------\n";
+    }
+
+    conv3d(&in[0][0][0], k, &out[0][0][0], w, h, d, 0, 0, 0, 1, 0);
+
+    std::cout << "out: \n";
+    for (int z = 0; z < d; z++) {
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                std::cout << out[z][y][x] << " ";
+            }
+            std::cout << "\n";
+        }
+        std::cout << "\n---------------------------------\n";
     }
 }
 
