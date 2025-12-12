@@ -146,8 +146,8 @@ void conv2d(T* input, V k[KERNEL_HEIGHT][KERNEL_WIDTH], T* output, int w, int h,
             std::vector<V>cs(channels);
             for (int ky = 0; ky < KERNEL_HEIGHT; ky++) {
                 for (int kx = 0; kx < KERNEL_WIDTH; kx++) {
-                    int px = x + kx - marginx;
-                    int py = y + ky - marginy;
+                    int px = x + kx - (KERNEL_WIDTH / 2);
+                    int py = y + ky - (KERNEL_HEIGHT / 2);
                     if (!(px < 0 || px >= w || py < 0 || py >= h))
                     {
                         V e = k[ky][kx];
