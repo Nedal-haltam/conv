@@ -7,13 +7,14 @@ import numpy.ctypeslib as npct
 from scipy.ndimage import convolve
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import List, Tuple
+import platform
 import numpy.typing as npt
 
-# FFI : bool = False
-FFI : bool = True
+FFI : bool = False
+# FFI : bool = True
 CONV_FUNC_NAME = 'conv3d_3p'
-DLL_PATH = './build/libcconv3d.so'
-
+DLL_PATH = ''
+    
 NUM_THREADS = 12
 
 def worker_conv(
@@ -107,6 +108,7 @@ def convffi(conv3d_func, frames : list, k3d_flat) -> bool:
     return True
 
 def main():
+def main_video():
     global cap, writer
     lib = ctypes.CDLL(DLL_PATH)
     conv3d_func = lib[CONV_FUNC_NAME]
@@ -220,6 +222,10 @@ def main():
     writer.release()
     print(f"✅ Done! Saved to {output_path}")
 
-
 if __name__ == "__main__":
-    main()
+    IS_WINDOWS = platform.system() == 'Windows'
+    if IS_WINDOWS:
+        DLL_PATH = './build/conv3d.dll'
+    else:
+        DLL_PATH = './build/libconv3d.so'
+        main_video()

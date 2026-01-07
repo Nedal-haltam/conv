@@ -1,7 +1,6 @@
+.PHONY: all build run-all-images run-all-videos all-vids all-imgs clean c-ffi c-dll
 
 LIBS := $(shell pkg-config --cflags --libs opencv4) -L./fftw-3.3.10/fftw-3.3.10/.libs/ -l:libfftw3.a -lm
-
-.PHONY: all build run-all-images run-all-videos all-vids all-imgs
 
 all: build run-all-images run-all-videos
 
@@ -21,7 +20,9 @@ run-all-images:
 	./build/main -i ./input_images/humananflower.ppm -o ./output_images/humananflower.ppm
 
 c-ffi:
-	g++ -o ./build/libcconv3d.so conv3d.cpp -shared -fPIC -O3 -march=native
+	g++ -o ./build/libconv3d.so conv3d.cpp -shared -fPIC -O3 -march=native
+c-dll:
+	g++ -o ./build/conv3d.dll conv3d.cpp -shared -O3 -march=native -Wl,--export-all-symbols
 
 run-all-videos:
 	./build/main -i ./input_videos/sample.mp4 -o ./output_videos/sample.mp4
