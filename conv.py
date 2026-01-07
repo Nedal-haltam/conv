@@ -107,7 +107,84 @@ def convffi(conv3d_func, frames : list, k3d_flat) -> bool:
     frames.append(next_frame.astype(np.float32))
     return True
 
-def main():
+def main_real_time():
+    global cap
+    lib = ctypes.CDLL(DLL_PATH)
+    conv3d_func = lib[CONV_FUNC_NAME]
+    
+    if CONV_FUNC_NAME == 'conv3d':
+        conv3d_func.argtypes = [
+            ctypes.c_voidp, ctypes.POINTER(ctypes.c_float), ctypes.c_voidp,
+            ctypes.c_int, ctypes.c_int
+        ]
+        conv3d_func.restype = None
+    elif CONV_FUNC_NAME == 'conv3d_3p':
+        conv3d_func.argtypes = [
+            ctypes.c_voidp, ctypes.c_voidp, ctypes.c_voidp,
+            ctypes.POINTER(ctypes.c_float), ctypes.c_voidp,
+            ctypes.c_int, ctypes.c_int
+        ]
+        conv3d_func.restype = None
+
+    kernel3d = np.array([
+        [[-1, -2, -1], [-2, -4, -2], [-1, -2, -1]],
+        [[0, 0, 0],    [0, 0, 0],    [0, 0, 0]],
+        [[1, 2, 1],    [2, 4, 2],    [1, 2, 1]]
+    ], dtype=np.float32)
+    kernel3d_flat = kernel3d.flatten()
+
+    cap = cv2.VideoCapture(0) 
+    if not cap.isOpened():
+        print("ERROR: Could not open camera.")
+        exit()
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    print(f"Camera opened: {w}x{h}")
+    print("Press 'q' to quit.")
+
+    frames = []
+    for _ in range(2):
+        ret, f = cap.read()
+        if not ret: break
+        if FFI:
+            frames.append(f.astype(np.float32))
+        else:
+            frames.append(f.astype(np.float32) / 255.0)
+
+    while True:
+        ret, f = cap.read()
+        f = cv2.flip(f, 1)
+        if not ret:
+            break
+            
+        if FFI:
+            frames.append(f.astype(np.float32))
+        else:
+            frames.append(f.astype(np.float32) / 255.0)
+
+        result_frame = worker_conv(
+            0,
+            conv3d_func,
+            frames,
+            kernel3d,
+            kernel3d_flat,
+            w, h
+        )
+        cv2.imshow("3D Conv Real-Time", result_frame)
+        frames.pop(0)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    # Cleanup
+    cap.release()
+    cv2.destroyAllWindows()
+
 def main_video():
     global cap, writer
     lib = ctypes.CDLL(DLL_PATH)
@@ -226,6 +303,7 @@ if __name__ == "__main__":
     IS_WINDOWS = platform.system() == 'Windows'
     if IS_WINDOWS:
         DLL_PATH = './build/conv3d.dll'
+        main_real_time()
     else:
         DLL_PATH = './build/libconv3d.so'
         main_video()
