@@ -14,13 +14,6 @@
 #include "fftw-3.3.10/fftw-3.3.10/api/fftw3.h"
 using namespace cv;
 
-#define KERNEL_WIDTH 3
-#define KERNEL_HEIGHT 3
-#define KERNEL_DEPTH 3
-
-bool pseudo = false;
-bool verbose = false;
-
 typedef struct {
     int width;
     int height;
@@ -28,6 +21,14 @@ typedef struct {
     int channels;
     unsigned char* data;
 } PPMImage;
+
+#define KERNEL_WIDTH 3
+#define KERNEL_HEIGHT 3
+#define KERNEL_DEPTH 3
+
+bool pseudo = false;
+bool verbose = false;
+
 
 int KERNEL2D_EDGE_DETECTOR[KERNEL_HEIGHT][KERNEL_WIDTH] = {
     {-1, -2, -1},
@@ -128,7 +129,6 @@ void PadImage(PPMImage& img, int padH, int padW, bool PadZero)
     }
 }
 
-// 1d conv
 template<class T, class V>
 void conv1d(T* a, int alen, V* b, int blen, T* c)
 {
@@ -503,163 +503,6 @@ void HandleMP4_2D(const char* input_path, const char* output_path)
     writer.release();
     if (verbose) std::cout << "Output saved to " << output_path << "\n";
 }
-void HandleMP4_3D(const char* input_path, const char* output_path)
-{
-    VideoCapture cap(input_path);
-    if (!cap.isOpened()) {
-        std::cout << "Failed to open input video\n";
-        exit(1);
-    }
-
-    int width = static_cast<int>(cap.get(CAP_PROP_FRAME_WIDTH));
-    int height = static_cast<int>(cap.get(CAP_PROP_FRAME_HEIGHT));
-    int fps = static_cast<int>(cap.get(CAP_PROP_FPS));
-    int total_frames = static_cast<int>(cap.get(CAP_PROP_FRAME_COUNT));
-
-    if (verbose) std::cout << "Video properties: " << width << "x" << height << " at " << fps << " FPS, total frames: " << total_frames << "\n";
-    if (verbose) std::cout << "Loading frames...\n";
-    std::vector<Mat> input_frames;
-    for (int i = 0; i < total_frames; ++i) {
-        Mat frame;
-        cap >> frame;
-        if (frame.empty()) break;
-        cvtColor(frame, frame, COLOR_BGR2GRAY);
-        Mat frame_f;
-        frame.convertTo(frame_f, CV_32F);
-        input_frames.push_back(frame_f);
-    }
-    cap.release();
-
-    int padD = KERNEL_DEPTH / 2, padH = KERNEL_HEIGHT / 2, padW = KERNEL_WIDTH / 2;
-
-    int D = static_cast<int>(input_frames.size());
-    int H = input_frames[0].rows;
-    int W = input_frames[0].cols;
-
-    std::vector<Mat> output_frames(D);
-    for (int t = 0; t < D; ++t)
-        output_frames[t] = Mat::zeros(H, W, CV_32F);
-
-    if (verbose) std::cout << "Applying 3D convolution...\n";
-    // 3D convolution
-    StartClock();
-    if (verbose) std::cout << "clock started\n";
-    for (int z = padD; z < D - padD; ++z) {
-        for (int y = padH; y < H - padH; ++y) {
-            for (int x = padW; x < W - padW; ++x) {
-                float sum = 0.0f;
-                for (int dz = 0; dz < KERNEL_DEPTH; ++dz)
-                    for (int dy = 0; dy < KERNEL_HEIGHT; ++dy)
-                        for (int dx = 0; dx < KERNEL_WIDTH; ++dx)
-                        {
-                            int tz = z + dz - padD;
-                            int ty = y + dy - padH;
-                            int tx = x + dx - padW;
-                            sum += input_frames[tz].at<float>(ty, tx) * k3d[dz][dy][dx];
-                        }
-                output_frames[z].at<float>(y, x) = clampf((sum));
-            }
-        }
-    }
-    EndClock(true);
-
-    if (verbose) std::cout << "Writing output video...\n";
-    // Convert float frames to 8-bit for VideoWriter
-    VideoWriter writer(output_path, VideoWriter::fourcc('m','p','4','v'), fps, Size(width, height), false);
-    if (!writer.isOpened()) {
-        std::cout << "Failed to open output video\n";
-        exit(1);
-    }
-
-    for (auto &f : output_frames) {
-        Mat f8u;
-        f.convertTo(f8u, CV_8U, 1.0, 0);
-        writer.write(f8u);
-    }
-
-    if (verbose) std::cout << "Output saved to " << output_path << "\n";
-}
-void HandleMP4_3D_RGB(const char* input_path, const char* output_path)
-{
-    VideoCapture cap(input_path);
-    if (!cap.isOpened()) {
-        std::cout << "Failed to open input video\n";
-        exit(1);
-    }
-
-    int width = static_cast<int>(cap.get(CAP_PROP_FRAME_WIDTH));
-    int height = static_cast<int>(cap.get(CAP_PROP_FRAME_HEIGHT));
-    int fps = static_cast<int>(cap.get(CAP_PROP_FPS));
-    int total_frames = static_cast<int>(cap.get(CAP_PROP_FRAME_COUNT));
-
-    if (verbose) std::cout << "Video properties: " << width << "x" << height << " at " << fps << " FPS, total frames: " << total_frames << "\n";
-    if (verbose) std::cout << "Loading frames...\n";
-    // Load all frames (color)
-    std::vector<Mat> input_frames;
-    for (int i = 0; i < total_frames; ++i) {
-        Mat frame;
-        cap >> frame;
-        if (frame.empty()) break;
-        Mat frame_f;
-        frame.convertTo(frame_f, CV_8UC3);  // convert to float with 3 channels
-        input_frames.push_back(frame_f);
-    }
-    cap.release();
-
-    int padD = KERNEL_DEPTH / 2, padH = KERNEL_HEIGHT / 2, padW = KERNEL_WIDTH / 2;
-
-    int D = static_cast<int>(input_frames.size());
-    int H = input_frames[0].rows;
-    int W = input_frames[0].cols;
-    
-    // Initialize output frames
-    std::vector<Mat> output_frames(D);
-    for (int t = 0; t < D; ++t)
-        output_frames[t] = Mat::zeros(H, W, CV_8UC3);
-
-    if (verbose) std::cout << "Applying 3D convolution on RGB frames...\n";
-    // 3D convolution
-    StartClock();
-    if (verbose) std::cout << "clock started\n";
-    for (int z = padD; z < D - padD; ++z) {
-        for (int y = padH; y < H - padH; ++y) {
-            for (int x = padW; x < W - padW; ++x) {
-                Vec3f sum(0, 0, 0);
-                for (int dz = 0; dz < KERNEL_DEPTH; ++dz)
-                    for (int dy = 0; dy < KERNEL_HEIGHT; ++dy)
-                        for (int dx = 0; dx < KERNEL_WIDTH; ++dx)
-                        {
-                            int tz = z + dz - padD;
-                            int ty = y + dy - padH;
-                            int tx = x + dx - padW;
-                            Vec3f pixel = input_frames[tz].at<Vec3f>(ty, tx);
-                            float k = k3d[dz][dy][dx];
-                            sum[0] += pixel[0] * k; // Blue
-                            sum[1] += pixel[1] * k; // Green
-                            sum[2] += pixel[2] * k; // Red
-                        }
-                output_frames[z].at<Vec3f>(y, x) = sum;
-            }
-        }
-    }
-    EndClock(true);
-
-    if (verbose) std::cout << "Writing output video...\n";
-    // Write output video
-    VideoWriter writer(output_path, VideoWriter::fourcc('m','p','4','v'), fps, Size(width, height), true);
-    if (!writer.isOpened()) {
-        std::cout << "Failed to open output video\n";
-        exit(1);
-    }
-
-    for (auto &f : output_frames) {
-        Mat f8u;
-        f.convertTo(f8u, CV_8UC3, 1.0, 0);
-        writer.write(f8u);
-    }
-
-    if (verbose) std::cout << "Output saved to " << output_path << "\n";
-}
 void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
 {
     VideoCapture cap(input_path);
@@ -791,134 +634,10 @@ void usage(const char* prog_name)
     std::cout << "Supported input/output formats: .ppm, .png, .mp4\n";
 }
 
-void test_conv2d()
-{
-    const int w = 5, h = 5;
-    int in[h][w];
-    int k[KERNEL_HEIGHT][KERNEL_WIDTH];
-    // int k[KERNEL_HEIGHT][KERNEL_WIDTH] = {
-    //     {0, 1, 0},
-    //     {1, 1, 1},
-    //     {0, 1, 0},
-    // };
-    for (int dy = 0; dy < KERNEL_HEIGHT; dy++)
-        for (int dx = 0; dx < KERNEL_WIDTH; dx++)
-            k[dy][dx] = dy * KERNEL_WIDTH + dx + 1;
-
-    int out[h][w];
-    memset(out, 0, sizeof(int) * w * h);
-    for (int i = 0; i < h; i++)
-        for (int j = 0; j < w; j++)
-            in[i][j] = i * w + j + 1;
-    // std::cout << "in: \n";
-    // for (int i = 0; i < h; i++)
-    // {
-    //     for (int j = 0; j < w; j++)
-    //     std::cout << in[i][j] << " ";
-    //     std::cout << "\n";
-    // }
-    // std::cout << "out: \n";
-    // for (int i = 0; i < h; i++)
-    // {
-    //     for (int j = 0; j < w; j++)
-    //         std::cout << out[i][j] << " ";
-    //     std::cout << "\n";
-    // }
-
-
-    conv2d(&in[0][0], k, &out[0][0], w, h, 0, 0, 1, 0);
-
-    // std::cout << "in: \n";
-    // for (int i = 0; i < 5; i++)
-    // {
-    //     for (int j = 0; j < 5; j++)
-    //     std::cout << in[i][j] << " ";
-    //     std::cout << "\n";
-    // }
-    // std::cout << "out: \n";
-    for (int i = 0; i < 5; i++)
-    {
-        for (int j = 0; j < 5; j++)
-            std::cout << out[i][j] << "\n";
-            // std::cout << out[i][j] << " ";
-        // std::cout << "\n";
-    }
-}
-
-void test_conv3d()
-{
-    const int w = 5, h = 5, d = 5;
-    int in[d][h][w];
-    int k[KERNEL_DEPTH][KERNEL_HEIGHT][KERNEL_WIDTH];
-    // int k[KERNEL_DEPTH][KERNEL_HEIGHT][KERNEL_WIDTH] = {
-    //     {
-    //         {0, 0, 0},
-    //         {0, 0, 0},
-    //         {0, 0, 0},
-    //     },
-    //     {
-    //         {0, 0, 0},
-    //         {0, 1, 0},
-    //         {0, 0, 0},
-    //     },
-    //     {
-    //         {0, 0, 0},
-    //         {0, 0, 0},
-    //         {0, 0, 0},
-    //     },
-    // };
-    for (int dz = 0; dz < KERNEL_DEPTH; dz++)
-        for (int dy = 0; dy < KERNEL_HEIGHT; dy++)
-            for (int dx = 0; dx < KERNEL_WIDTH; dx++)
-                k[dz][dy][dx] = dz * KERNEL_WIDTH * KERNEL_HEIGHT + dy * KERNEL_WIDTH + dx + 1;
-
-    int out[d][h][w];
-    memset(out, 0, sizeof(int) * w * h * d);
-    for (int z = 0; z < d; z++)
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++)
-                in[z][y][x] = z * w * h + y * w + x + 1;
-
-    // std::cout << "in: \n";
-    // for (int z = 0; z < d; z++) {
-    //     for (int y = 0; y < h; y++) {
-    //         for (int x = 0; x < w; x++) {
-    //             std::cout << in[z][y][x] << " ";
-    //         }
-    //         std::cout << "\n";
-    //     }
-    //     std::cout << "\n---------------------------------\n";
-    // }
-    // std::cout << "out: \n";
-    // for (int z = 0; z < d; z++) {
-    //     for (int y = 0; y < h; y++) {
-    //         for (int x = 0; x < w; x++) {
-    //             std::cout << out[z][y][x] << " ";
-    //         }
-    //         std::cout << "\n";
-    //     }
-    //     std::cout << "\n---------------------------------\n";
-    // }
-
-    conv3d(&in[0][0][0], k, &out[0][0][0], w, h, d, 0, 0, 0, 1, 0);
-
-    // std::cout << "out: \n";
-    for (int z = 0; z < d; z++) {
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
-                // std::cout << out[z][y][x] << " ";
-                std::cout << out[z][y][x] << "\n";
-            }
-            // std::cout << "\n";
-        }
-        // std::cout << "\n---------------------------------\n";
-    }
-}
+#include "./test_conv.cpp"
 
 int main(int argc, char* argv[])
 {
-    test_conv2d();
-    return 0;
     const char* input_path = NULL;
     const char* output_path = NULL;
     int i = 1;
@@ -998,15 +717,9 @@ int main(int argc, char* argv[])
         // std::cout << "Running 2D per-frame convolution -> " << out_2d << "\n";
         // HandleMP4_2D(input_path, out_2d.c_str());
         // std::cout << "---------------------------------------------------------------\n";
-        
-        // std::cout << "---------------------------------------------------------------\n";
-        // std::cout << "Running 3D temporal convolution (grayscale) -> " << out_3d_gray << "\n";
-        // HandleMP4_3D(input_path, out_3d_gray.c_str());
-        // std::cout << "---------------------------------------------------------------\n";
-        
+                
         std::cout << "---------------------------------------------------------------\n";
         std::cout << "Running 3D temporal convolution (RGB) -> " << out_3d_rgb << "\n";
-        // HandleMP4_3D_RGB(input_path, out_3d_rgb.c_str()); // consumes too much memory
         HandleMP4_3D_RGB_Sliding(input_path, out_3d_rgb.c_str());
         std::cout << "---------------------------------------------------------------\n";
     }
