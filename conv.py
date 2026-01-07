@@ -150,6 +150,7 @@ def main_real_time():
     frames = []
     for _ in range(2):
         ret, f = cap.read()
+        f = cv2.flip(f, 1)
         if not ret: break
         if FFI:
             frames.append(f.astype(np.float32))
