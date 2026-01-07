@@ -133,13 +133,11 @@ def main_real_time():
     ], dtype=np.float32)
     kernel3d_flat = kernel3d.flatten()
 
-    cap = cv2.VideoCapture(0) 
+    cap = cv2.VideoCapture(0)
+
     if not cap.isOpened():
         print("ERROR: Could not open camera.")
         exit()
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
