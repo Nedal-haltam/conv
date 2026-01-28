@@ -74,7 +74,7 @@ def worker_conv(
     idx: int,
     conv3d_func: ctypes.CDLL,
     all_frames: List[npt.NDArray[np.float32]],
-    kernel,
+    k3d : npt.NDArray[np.float32],
     width: int,
     height: int
 ) -> npt.NDArray[np.uint8]:
@@ -101,9 +101,9 @@ def worker_conv(
             p_out,
             width,
             height,
-            kernel.shape[2],
-            kernel.shape[1],
-            kernel.shape[0],
+            k3d.shape[2],
+            k3d.shape[1],
+            k3d.shape[0],
             3
         )
         return np.clip(out_frame, 0, 255).astype(np.uint8)
@@ -153,7 +153,7 @@ def main_real_time(k3d):
     cap.release()
     cv2.destroyAllWindows()
 
-def main_video(input_path : str, output_path : str, k3d):
+def main_video(input_path : str, output_path : str, k3d : npt.NDArray[np.float32]):
 
     conv3d_func = get_conv3d_func(DLL_PATH, CONV_FUNC_NAME)
     cap, fps, w, h, total_frames = init_capture(input_path)
@@ -214,13 +214,13 @@ def main_video(input_path : str, output_path : str, k3d):
     print(f"Saved to {output_path}")
 
 if __name__ == "__main__":
-    k3d = K3D_EDGE_DET
+    kernel = K3D_EDGE_DET
     FFI = True
     if platform.system() == 'Windows':
         DLL_PATH = './build/conv3d.dll'
-        main_real_time(k3d)
+        main_real_time(kernel)
     else:
         DLL_PATH = './build/libconv3d.so'
         input_path = "./input_videos/sample.mp4"
         output_path = "./output_videos/output_py.mp4"
-        main_video(input_path, output_path, k3d)
+        main_video(input_path, output_path, kernel)
