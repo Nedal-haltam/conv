@@ -111,7 +111,7 @@ def worker_conv(
         stacked = np.stack(frames, axis=0)  # shape (3, h, w, 3)
         out_channels = []
         for c in range(3):
-            out = convolve(stacked[:, :, :, c], kernel, mode='nearest')
+            out = convolve(stacked[:, :, :, c], k3d, mode='nearest')
             out_channels.append(out[1])
 
         out_frame = np.stack(out_channels, axis=2)
