@@ -85,7 +85,7 @@ def worker_conv(
     ]
 
     if FFI:
-        out_frame = np.empty((height, width, 3), dtype=np.float32)
+        out_frame = np.zeros((height, width, 3), dtype=np.float32)
 
         p_prev = frames[0].ctypes.data_as(ctypes.c_voidp)
         p_curr = frames[1].ctypes.data_as(ctypes.c_voidp)
