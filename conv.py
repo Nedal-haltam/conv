@@ -9,7 +9,7 @@ from typing import List
 import platform
 import numpy.typing as npt
 
-FFI : bool = False
+FFI : bool = True
 CONV_FUNC_NAME : str = 'conv3d_3p'
 DLL_PATH : str = ''
 NUM_THREADS : int = 12
@@ -162,7 +162,6 @@ def main_video(input_path : str, output_path : str, k3d : npt.NDArray[np.float32
         exit()
     writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
 
-    start_time = time.time()
     frames = []
     for _ in range(2):
         ret, f = cap.read()
@@ -170,6 +169,7 @@ def main_video(input_path : str, output_path : str, k3d : npt.NDArray[np.float32
             break
         frames.append(convert_frame(f))
 
+    start_time = time.time()
     while True:
         future_frames: List[npt.NDArray[np.float32]] = []
         for _ in range(NUM_THREADS):
@@ -203,9 +203,8 @@ def main_video(input_path : str, output_path : str, k3d : npt.NDArray[np.float32
             frames.pop(0)
             frames.append(future_frames[i])
 
-    print("All frames processed.")
-
     end_time = time.time()
+    print("All frames processed.")
     elapsed_time = end_time - start_time
     print(f"Time taken: {elapsed_time:.6f}s")
 
