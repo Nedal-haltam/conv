@@ -1,9 +1,6 @@
+#include <chrono>
 #include <iostream>
 #include <vector>
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
 #include <cstdio>
 #include <opencv2/opencv.hpp>
 #include <iostream>
@@ -11,7 +8,14 @@
 #include <cmath>
 #include <deque>
 #include <thread>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 #include "fftw-3.3.10/fftw-3.3.10/api/fftw3.h"
+#include "conv3d.cpp"
+
 using namespace cv;
 
 typedef struct {
@@ -80,11 +84,7 @@ double EndClock(bool Verbose = false)
     std::cout.precision(6);
     return TimeTaken;
 }
-float clampf(float val) {
-    if (val < 0.0f) return 0.0f;
-    if (val > 255.0f) return 255.0f;
-    return val;
-}
+
 unsigned char clamp(int val) {
     if (val < 0) return 0;
     if (val > 255) return 255;
@@ -503,6 +503,7 @@ void HandleMP4_2D(const char* input_path, const char* output_path)
     writer.release();
     if (verbose) std::cout << "Output saved to " << output_path << "\n";
 }
+
 void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
 {
     VideoCapture cap(input_path);
@@ -516,116 +517,106 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
     int fps = static_cast<int>(cap.get(CAP_PROP_FPS));
     int total_frames = static_cast<int>(cap.get(CAP_PROP_FRAME_COUNT));
 
-    if (verbose) std::cout << "Video properties: " << width << "x" << height << " at " << fps << " FPS, total frames: " << total_frames << "\n";
+    if (verbose) std::cout << "Video properties: " << width << "x" << height << " at " << fps << " FPS\n";
 
-    int padH = KERNEL_HEIGHT / 2, padW = KERNEL_WIDTH / 2;
-    int padD = KERNEL_DEPTH / 2;
-
-    // Prepare VideoWriter
     VideoWriter writer(output_path, VideoWriter::fourcc('m','p','4','v'), fps, Size(width, height), true);
     if (!writer.isOpened()) {
         std::cout << "Failed to open output video\n";
         exit(1);
     }
-
+    
     if (verbose) std::cout << "Processing video with sliding 3D convolution...\n";
+    int num_threads = 12;
+    std::cout << "Using batch size: " << num_threads << "\n";
 
-    int frame_idx = 0;
-    Mat frame;
-    StartClock();
-    if (verbose) std::cout << "clock started\n";
-
-    int num_threads = std::thread::hardware_concurrency();
-    std::cout << "Detected " << num_threads << " hardware threads.\n";
-    if (num_threads == 0) num_threads = 4;
-
-    auto worker = [&](int out_index, const std::vector<Mat>& frames, Mat& out)
-    {
-        const Mat& A = frames[out_index];
-        const Mat& B = frames[out_index + 1];
-        const Mat& C = frames[out_index + 2];
-
-        Mat temp = Mat::zeros(height, width, CV_32FC3);
-        const Mat buf[KERNEL_DEPTH] = { A, B, C };
-
-        for (int y = padH; y < height - padH; y++)
-        {
-            for (int x = padW; x < width - padW; x++)
-            {
-                Vec3f sum(0,0,0);
-                for (int dz = 0; dz < KERNEL_DEPTH; dz++)
-                    for (int dy = 0; dy < KERNEL_HEIGHT; dy++)
-                        for (int dx = 0; dx < KERNEL_WIDTH; dx++)
-                        {
-                            int ty = y + dy - padH;
-                            int tx = x + dx - padW;
-
-                            Vec3f p = buf[dz].at<Vec3f>(ty, tx);
-                            float k = k3d[dz][dy][dx];
-
-                            sum[0] += p[0] * k;
-                            sum[1] += p[1] * k;
-                            sum[2] += p[2] * k;
-                        }
-                sum[0] = clampf(sum[0]);
-                sum[1] = clampf(sum[1]);
-                sum[2] = clampf(sum[2]);
-
-                temp.at<Vec3f>(y, x) = sum;
-            }
-        }
-        out = temp;
-    };
-
-    std::vector<Mat> frame_buffer;  
-    frame_buffer.reserve(num_threads + 2);
-    for (int i = 0; i < num_threads + 2; i++)
-    {
-        Mat f;
+    std::vector<Mat> current_buffer; 
+    for(int i=0; i<2; i++) {
+        Mat f, f32;
         cap >> f;
-        if (f.empty()) break;
-        Mat f32;
+        if(f.empty()) break;
         f.convertTo(f32, CV_32FC3);
-        frame_buffer.push_back(f32);
+        current_buffer.push_back(f32);
     }
+    
+    std::vector<float> kernel_flat;
+    for(int z=0; z<KERNEL_DEPTH; z++)
+        for(int y=0; y<KERNEL_HEIGHT; y++)
+            for(int x=0; x<KERNEL_WIDTH; x++)
+                kernel_flat.push_back(k3d[z][y][x]);
 
-    int base = 0;
-    while (frame_buffer.size() >= KERNEL_DEPTH)
+    std::cout << "Processing started...\n";
+    auto start_time = std::chrono::high_resolution_clock::now();
+    if (verbose) std::cout << "clock started\n";
+    while (true)
     {
-        int batch_size = std::min(num_threads, (int)frame_buffer.size() - 2);
-
-        std::vector<Mat> outputs(batch_size);
-        std::vector<std::thread> threads;
-        for (int t = 0; t < batch_size; t++)
-        {
-            threads.emplace_back(worker, t, std::ref(frame_buffer), std::ref(outputs[t]));
-        }
-        for (auto& th : threads) th.join();
-
-        for (int t = 0; t < batch_size; t++)
-        {
-            Mat out8;
-            outputs[t].convertTo(out8, CV_8UC3);
-            writer.write(out8);
-        }
-        for (int i = 0; i < batch_size; i++)
-            frame_buffer.erase(frame_buffer.begin());
-        for (int i = 0; i < batch_size; i++)
-        {
-            Mat f;
+        std::vector<Mat> future_frames;
+        for (int i = 0; i < num_threads; i++) {
+            Mat f, f32;
             cap >> f;
             if (f.empty()) break;
-            Mat f32;
             f.convertTo(f32, CV_32FC3);
-            frame_buffer.push_back(f32);
+            future_frames.push_back(f32);
+        }
+        if (future_frames.empty()) break; 
+
+        std::vector<Mat> all_frames = current_buffer;
+        all_frames.insert(all_frames.end(), future_frames.begin(), future_frames.end());
+        
+        int current_batch_size = future_frames.size();
+        std::vector<Mat> results(current_batch_size);
+        std::vector<std::thread> workers;
+        
+        auto worker_task = [&](int idx) {
+            Mat& prev = all_frames[idx];
+            Mat& curr = all_frames[idx + 1];
+            Mat& next = all_frames[idx + 2];
+            Mat out_frame = Mat::zeros(height, width, CV_32FC3);
+
+            conv3d_3p(
+                prev.data, 
+                curr.data, 
+                next.data, 
+                kernel_flat.data(), 
+                out_frame.data, 
+                width, 
+                height, 
+                KERNEL_WIDTH, 
+                KERNEL_HEIGHT, 
+                KERNEL_DEPTH, 
+                3 
+            );
+            
+            results[idx] = out_frame;
+        };
+        
+        for (int i = 0; i < current_batch_size; i++) {
+            workers.emplace_back(worker_task, i);
+        }
+        
+        for (auto& t : workers) {
+            if(t.joinable()) t.join();
+        }
+
+        for (int i = 0; i < current_batch_size; i++) {
+            Mat save_img;
+            results[i].convertTo(save_img, CV_8UC3); 
+            writer.write(save_img);
+        }
+        
+        if (all_frames.size() >= 2) {
+            current_buffer.clear();
+            current_buffer.push_back(all_frames[all_frames.size() - 2]);
+            current_buffer.push_back(all_frames[all_frames.size() - 1]);
         }
     }
 
-    EndClock(true);
-    
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end_time - start_time;
+    std::cout << "Time taken: " << elapsed.count() << "s\n";
+
     cap.release();
     writer.release();
-    if (verbose) std::cout << "Output saved to " << output_path << "\n";
+    if (verbose) std::cout << "All frames processed and saved to " << output_path << "\n";
 }
 
 void usage(const char* prog_name)
