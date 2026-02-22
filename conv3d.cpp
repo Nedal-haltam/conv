@@ -1,3 +1,4 @@
+#include <vector>
 
 float clampf(float val) {
     if (val < 0.0f) return 0.0f;
@@ -5,19 +6,12 @@ float clampf(float val) {
     return val;
 }
 
-extern "C" void conv3d_3p(void* prev_ptr,void* curr_ptr,void* next_ptr,float* kernel, void* output_ptr, int width, int height, int kw, int kh, int kd, int cs)
+extern "C" void conv3d(float** inputs, float* kernel, float* output, int width, int height, int depth, int kw, int kh, int kd, int cs)
 {
-    float* inputs[3];
-    inputs[0] = static_cast<float*>(prev_ptr);
-    inputs[1] = static_cast<float*>(curr_ptr);
-    inputs[2] = static_cast<float*>(next_ptr);
-    
-    float* output = static_cast<float*>(output_ptr);
-
     int padH = kh / 2;
     int padW = kw / 2;
     const int input_row_stride = width * cs;
-
+    
     for (int y = padH; y < height - padH; ++y)
     {
         for (int x = padW; x < width - padW; ++x)
