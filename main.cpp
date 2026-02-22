@@ -29,9 +29,7 @@ typedef struct {
 #define KERNEL_WIDTH 3
 #define KERNEL_HEIGHT 3
 #define KERNEL_DEPTH 3
-
-bool pseudo = false;
-bool verbose = false;
+#define THREAD_COUNT 12
 
 
 int KERNEL2D_EDGE_DETECTOR[KERNEL_HEIGHT][KERNEL_WIDTH] = {
@@ -458,7 +456,7 @@ void HandleMP4_2D(const char* input_path, const char* output_path)
     double fps = cap.get(CAP_PROP_FPS);
     int total_frames = static_cast<int>(cap.get(CAP_PROP_FRAME_COUNT));
 
-    if (verbose) std::cout << "Video properties: " << width << "x" << height << " at " << fps << " FPS, total frames: " << total_frames << "\n";
+    std::cout << "Video properties: " << width << "x" << height << " at " << fps << " FPS, total frames: " << total_frames << "\n";
 
     VideoWriter writer(output_path, VideoWriter::fourcc('m', 'p', '4', 'v'), fps, Size(width, height));
 
@@ -468,10 +466,10 @@ void HandleMP4_2D(const char* input_path, const char* output_path)
     }
 
     cv::Mat frame, filtered;
-    if (verbose) std::cout << "Processing video...\n";
+    std::cout << "Processing video...\n";
 
     StartClock();
-    if (verbose) std::cout << "clock started\n";
+    std::cout << "clock started\n";
     while (true) {
         cap >> frame;
         if (frame.empty())
@@ -501,7 +499,7 @@ void HandleMP4_2D(const char* input_path, const char* output_path)
 
     cap.release();
     writer.release();
-    if (verbose) std::cout << "Output saved to " << output_path << "\n";
+    std::cout << "Output saved to " << output_path << "\n";
 }
 
 void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
@@ -516,8 +514,7 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
     int height = static_cast<int>(cap.get(CAP_PROP_FRAME_HEIGHT));
     int fps = static_cast<int>(cap.get(CAP_PROP_FPS));
     int total_frames = static_cast<int>(cap.get(CAP_PROP_FRAME_COUNT));
-
-    if (verbose) std::cout << "Video properties: " << width << "x" << height << " at " << fps << " FPS\n";
+    std::cout << "Capture initialized: " << width << "x" << height << " at " << fps << " FPS, total frames: " << total_frames << "\n";
 
     VideoWriter writer(output_path, VideoWriter::fourcc('m','p','4','v'), fps, Size(width, height), true);
     if (!writer.isOpened()) {
@@ -525,89 +522,80 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
         exit(1);
     }
     
-    if (verbose) std::cout << "Processing video with sliding 3D convolution...\n";
-    int num_threads = 12;
-    std::cout << "Using batch size: " << num_threads << "\n";
+    std::cout << "Processing video with sliding 3D convolution...\n";
 
-    std::vector<Mat> current_buffer; 
-    for(int i=0; i<2; i++) {
+    std::vector<Mat> frames; 
+    for(int i = 0; i < 2; i++) {
         Mat f, f32;
         cap >> f;
-        if(f.empty()) break;
+        if (f.empty()) break;
         f.convertTo(f32, CV_32FC3);
-        current_buffer.push_back(f32);
+        frames.push_back(f32);
     }
     
-    std::vector<float> kernel_flat;
-    for(int z=0; z<KERNEL_DEPTH; z++)
-        for(int y=0; y<KERNEL_HEIGHT; y++)
-            for(int x=0; x<KERNEL_WIDTH; x++)
-                kernel_flat.push_back(k3d[z][y][x]);
-
     std::cout << "Processing started...\n";
+    std::cout << "clock started\n";
     auto start_time = std::chrono::high_resolution_clock::now();
-    if (verbose) std::cout << "clock started\n";
     while (true)
     {
-        std::vector<Mat> future_frames;
-        for (int i = 0; i < num_threads; i++) {
+        for (int i = 0; i < THREAD_COUNT; i++) {
             Mat f, f32;
             cap >> f;
             if (f.empty()) break;
             f.convertTo(f32, CV_32FC3);
-            future_frames.push_back(f32);
+            frames.push_back(f32);
         }
-        if (future_frames.empty()) break; 
+        if (frames.size() < KERNEL_DEPTH) break;
 
-        std::vector<Mat> all_frames = current_buffer;
-        all_frames.insert(all_frames.end(), future_frames.begin(), future_frames.end());
-        
-        int current_batch_size = future_frames.size();
-        std::vector<Mat> results(current_batch_size);
+        std::vector<Mat> results(THREAD_COUNT);
         std::vector<std::thread> workers;
-        
         auto worker_task = [&](int idx) {
-            Mat& prev = all_frames[idx];
-            Mat& curr = all_frames[idx + 1];
-            Mat& next = all_frames[idx + 2];
+            int cs = 3;
+            float* inputs[KERNEL_DEPTH];
+            for (int i = 0; i < KERNEL_DEPTH; i++) {
+                inputs[i] = (float*)frames[idx + i].data;
+            }
             Mat out_frame = Mat::zeros(height, width, CV_32FC3);
 
-            conv3d_3p(
-                prev.data, 
-                curr.data, 
-                next.data, 
-                kernel_flat.data(), 
-                out_frame.data, 
+            conv3d(
+                &inputs[0],
+                &k3d[0][0][0],
+                (float*)out_frame.data,
+
                 width, 
                 height, 
+                KERNEL_DEPTH,
+
                 KERNEL_WIDTH, 
                 KERNEL_HEIGHT, 
                 KERNEL_DEPTH, 
-                3 
+
+                cs
             );
             
             results[idx] = out_frame;
         };
-        
-        for (int i = 0; i < current_batch_size; i++) {
+        for (int i = 0; i < THREAD_COUNT; i++) {
             workers.emplace_back(worker_task, i);
         }
-        
         for (auto& t : workers) {
             if(t.joinable()) t.join();
         }
 
-        for (int i = 0; i < current_batch_size; i++) {
+        for (int i = 0; i < THREAD_COUNT; i++) {
             Mat save_img;
             results[i].convertTo(save_img, CV_8UC3); 
             writer.write(save_img);
         }
         
-        if (all_frames.size() >= 2) {
-            current_buffer.clear();
-            current_buffer.push_back(all_frames[all_frames.size() - 2]);
-            current_buffer.push_back(all_frames[all_frames.size() - 1]);
+        for (int i = 0; i < THREAD_COUNT; i++) {
+            frames.erase(frames.begin());
         }
+        // if (all_frames.size() >= 2) {
+        //     current_buffer.clear();
+        //     current_buffer.push_back(all_frames[all_frames.size() - 2]);
+        //     current_buffer.push_back(all_frames[all_frames.size() - 1]);
+        // }
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
@@ -616,7 +604,7 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
 
     cap.release();
     writer.release();
-    if (verbose) std::cout << "All frames processed and saved to " << output_path << "\n";
+    std::cout << "All frames processed and saved to " << output_path << "\n";
 }
 
 void usage(const char* prog_name)
@@ -659,10 +647,6 @@ int main(int argc, char* argv[])
                 std::cerr << "Error: Missing output file after -o\n";
                 return 1;
             }
-        }
-        else if (strcmp(argv[i], "-verbose") == 0)
-        {
-            verbose = true;
         }
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--h") == 0 || strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-help") == 0)
         {
@@ -710,7 +694,6 @@ int main(int argc, char* argv[])
         // std::cout << "---------------------------------------------------------------\n";
                 
         std::cout << "---------------------------------------------------------------\n";
-        std::cout << "Running 3D temporal convolution (RGB) -> " << out_3d_rgb << "\n";
         HandleMP4_3D_RGB_Sliding(input_path, out_3d_rgb.c_str());
         std::cout << "---------------------------------------------------------------\n";
     }
