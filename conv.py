@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import time
 import cv2
 import ctypes
@@ -9,10 +10,11 @@ from typing import List
 import platform
 import numpy.typing as npt
 
-FFI : bool = True
-CONV_FUNC_NAME : str = 'conv3d_3p'
-DLL_PATH : str = ''
-NUM_THREADS : int = 12
+# FFI : bool = True
+FFI : bool = False
+CONV_FUNC_NAME : str = 'conv3d'
+DLL_PATH : str = './build/libconv3d.so'
+THREAD_COUNT : int = 12
 K3D_EDGE_DET = np.array([
     [
         [-1, -2, -1],
@@ -49,11 +51,10 @@ def get_conv3d_func(dll_path: str, func_name: str):
     lib = ctypes.CDLL(dll_path)
     conv3d_func = lib[func_name]
     conv3d_func.argtypes = [
-        ctypes.c_voidp,
-        ctypes.c_voidp,
-        ctypes.c_voidp,
+        ctypes.POINTER(ctypes.POINTER(ctypes.c_float)),
         ctypes.POINTER(ctypes.c_float),
-        ctypes.c_voidp,
+        ctypes.POINTER(ctypes.c_float),
+        ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
         ctypes.c_int,
@@ -64,59 +65,127 @@ def get_conv3d_func(dll_path: str, func_name: str):
     conv3d_func.restype = None
     return conv3d_func
 
-def convert_frame(f):
-    if FFI:
-        return f.astype(np.float32)
-    else:
-        return f.astype(np.float32) / 255.0
 
-def worker_conv(
+def worker_conv3d(
     idx: int,
     conv3d_func: ctypes.CDLL,
     all_frames: List[npt.NDArray[np.float32]],
     k3d : npt.NDArray[np.float32],
     width: int,
-    height: int
+    height: int,
 ) -> npt.NDArray[np.uint8]:
-    frames = [
-        all_frames[idx + 0],
-        all_frames[idx + 1],
-        all_frames[idx + 2],
-    ]
-
+    cs : int = 3
     if FFI:
-        out_frame = np.zeros((height, width, 3), dtype=np.float32)
+        c_float_p = ctypes.POINTER(ctypes.c_float)
+        FloatPtrArray3 = c_float_p * k3d.shape[0]
 
-        p_prev = frames[0].ctypes.data_as(ctypes.c_voidp)
-        p_curr = frames[1].ctypes.data_as(ctypes.c_voidp)
-        p_next = frames[2].ctypes.data_as(ctypes.c_voidp)
-        p_kern = k3d.flatten().ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-        p_out  = out_frame.ctypes.data_as(ctypes.c_voidp)
+        frames = all_frames[idx:idx+k3d.shape[0]]
+        safe_frames = [np.ascontiguousarray(f, dtype=np.float32) for f in frames]
+        safe_k3d = np.ascontiguousarray(k3d, dtype=np.float32)
+
+        inputs = FloatPtrArray3()
+        for i in range(k3d.shape[0]): inputs[i] = safe_frames[i].ctypes.data_as(c_float_p)
+        p_kern = safe_k3d.ctypes.data_as(c_float_p)
+        out_frame = np.zeros((height, width, cs), dtype=np.float32)
+        p_out  = out_frame.ctypes.data_as(c_float_p)
 
         conv3d_func(
-            p_prev,
-            p_curr,
-            p_next,
+            inputs,
             p_kern,
             p_out,
+
             width,
             height,
+            len(safe_frames),
+
             k3d.shape[2],
             k3d.shape[1],
             k3d.shape[0],
-            3
+
+            cs
         )
         return np.clip(out_frame, 0, 255).astype(np.uint8)
     else:
-        stacked = np.stack(frames, axis=0)  # shape (3, h, w, 3)
+        stacked = np.stack(all_frames[idx:idx+k3d.shape[0]], axis=0)  # shape = (k3d.shape[0], height, width, cs)
         out_channels = []
-        for c in range(3):
-            out = convolve(stacked[:, :, :, c], k3d, mode='nearest')
-            out_channels.append(out[1])
-
+        kh, kw = k3d.shape[1], k3d.shape[2]
+        padH = kh // 2
+        padW = kw // 2
+        
+        for c in range(cs):
+            out = convolve(stacked[:, :, :, c], k3d, mode='constant', cval=0.0)
+            channel_out = out[1].copy()
+            if padH > 0:
+                channel_out[:padH, :] = 0.0
+                channel_out[-padH:, :] = 0.0
+            if padW > 0:
+                channel_out[:, :padW] = 0.0
+                channel_out[:, -padW:] = 0.0
+            out_channels.append(channel_out)
         out_frame = np.stack(out_channels, axis=2)
-        return np.clip(out_frame * 255, 0, 255).astype(np.uint8)
+        return np.clip(out_frame, 0, 255).astype(np.uint8)
 
+def conv3d_on_video(input_path : str, output_path : str, k3d : npt.NDArray[np.float32]):
+
+    conv3d_func = get_conv3d_func(DLL_PATH, CONV_FUNC_NAME)
+    cap, fps, w, h, total_frames = init_capture(input_path)
+    if total_frames < k3d.shape[0]:
+        print("ERROR: Not enough frames in the video.")
+        exit()
+    
+    name, ext = os.path.splitext(output_path)
+    output_path = f"{name}_FFI_{FFI}{ext}"
+    writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+
+    frames = []
+    for _ in range(k3d.shape[0] - 1):
+        ret, f = cap.read()
+        if not ret: break
+        frames.append(f.astype(np.float32))
+
+    start_time = time.time()
+    while True:
+        for _ in range(THREAD_COUNT):
+            ret, f = cap.read()
+            if not ret: break
+            frames.append(f.astype(np.float32))
+        if len(frames) < THREAD_COUNT: break
+
+        with ThreadPoolExecutor(max_workers=THREAD_COUNT) as pool:
+            futures = [
+                pool.submit(
+                    worker_conv3d,
+                    i,
+                    conv3d_func,
+                    frames,
+                    k3d,
+                    w,
+                    h,
+                )
+                for i in range(THREAD_COUNT)
+            ]
+            results = [f.result() for f in futures]
+
+        for i in range(THREAD_COUNT): writer.write(results[i])
+        frames = frames[THREAD_COUNT:]
+
+    end_time = time.time()
+    print("All frames processed.")
+    elapsed_time = end_time - start_time
+    print(f"Time taken: {elapsed_time:.6f}s")
+
+    cap.release()
+    writer.release()
+    print(f"Saved to {output_path}")
+
+if __name__ == "__main__":
+    kernel = K3D_EDGE_DET
+    input_path = "./input_videos/sample.mp4"
+    output_path = "./output_videos/output_py.mp4"
+    conv3d_on_video(input_path, output_path, kernel)
+
+
+"""
 def main_real_time(k3d):
 
     conv3d_func = get_conv3d_func(DLL_PATH, CONV_FUNC_NAME)
@@ -127,15 +196,15 @@ def main_real_time(k3d):
     for _ in range(2):
         ret, f = cap.read()
         if not ret: break
-        frames.append(convert_frame(f))
+        frames.append(f.astype(np.float32))
 
     while True:
         ret, f = cap.read()
         if not ret:
             break
-        frames.append(convert_frame(f))
+        frames.append(f.astype(np.float32))
 
-        result_frame = worker_conv(
+        result_frame = worker_conv3d(
             0,
             conv3d_func,
             frames,
@@ -152,74 +221,4 @@ def main_real_time(k3d):
 
     cap.release()
     cv2.destroyAllWindows()
-
-def main_video(input_path : str, output_path : str, k3d : npt.NDArray[np.float32]):
-
-    conv3d_func = get_conv3d_func(DLL_PATH, CONV_FUNC_NAME)
-    cap, fps, w, h, total_frames = init_capture(input_path)
-    if total_frames < k3d.shape[0]:
-        print("ERROR: Not enough frames in the video.")
-        exit()
-    writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-
-    frames = []
-    for _ in range(2):
-        ret, f = cap.read()
-        if not ret:
-            break
-        frames.append(convert_frame(f))
-
-    start_time = time.time()
-    while True:
-        future_frames: List[npt.NDArray[np.float32]] = []
-        for _ in range(NUM_THREADS):
-            ret, nf = cap.read()
-            if not ret:
-                break
-            future_frames.append(convert_frame(nf))
-        if len(future_frames) < NUM_THREADS:
-            break
-
-        all_frames = frames + future_frames
-
-        with ThreadPoolExecutor(max_workers=NUM_THREADS) as pool:
-            futures = [
-                pool.submit(
-                    worker_conv,
-                    i,
-                    conv3d_func,
-                    all_frames,
-                    k3d,
-                    w,
-                    h
-                )
-                for i in range(NUM_THREADS)
-            ]
-            results = [f.result() for f in futures]
-
-        for i in range(NUM_THREADS):
-            writer.write(results[i])
-        for i in range(NUM_THREADS):
-            frames.pop(0)
-            frames.append(future_frames[i])
-
-    end_time = time.time()
-    print("All frames processed.")
-    elapsed_time = end_time - start_time
-    print(f"Time taken: {elapsed_time:.6f}s")
-
-    cap.release()
-    writer.release()
-    print(f"Saved to {output_path}")
-
-if __name__ == "__main__":
-    kernel = K3D_EDGE_DET
-    FFI = True
-    if platform.system() == 'Windows':
-        DLL_PATH = './build/conv3d.dll'
-        main_real_time(kernel)
-    else:
-        DLL_PATH = './build/libconv3d.so'
-        input_path = "./input_videos/sample.mp4"
-        output_path = "./output_videos/output_py.mp4"
-        main_video(input_path, output_path, kernel)
+"""
