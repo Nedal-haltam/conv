@@ -62,7 +62,7 @@ float KERNEL3D_EDGE_DETECTOR[KERNEL_DEPTH][KERNEL_HEIGHT][KERNEL_WIDTH] = {
         {1.0f, 2.0f, 1.0f}
     }
 };
-auto k3d = KERNEL3D_EDGE_DETECTOR;
+
 
 // misc funcs
 clock_t Clocker;
@@ -502,7 +502,7 @@ void HandleMP4_2D(const char* input_path, const char* output_path)
     std::cout << "Output saved to " << output_path << "\n";
 }
 
-void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
+void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path, float k3d[KERNEL_DEPTH][KERNEL_HEIGHT][KERNEL_WIDTH])
 {
     VideoCapture cap(input_path);
     if (!cap.isOpened()) {
@@ -522,8 +522,6 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
         exit(1);
     }
     
-    std::cout << "Processing video with sliding 3D convolution...\n";
-
     std::vector<Mat> frames; 
     for(int i = 0; i < 2; i++) {
         Mat f, f32;
@@ -533,8 +531,6 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
         frames.push_back(f32);
     }
     
-    std::cout << "Processing started...\n";
-    std::cout << "clock started\n";
     auto start_time = std::chrono::high_resolution_clock::now();
     while (true)
     {
@@ -597,6 +593,7 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
         //     current_buffer.push_back(all_frames[all_frames.size() - 1]);
         // }
     }
+    std::cout << "All frames processed\n";
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end_time - start_time;
@@ -604,7 +601,7 @@ void HandleMP4_3D_RGB_Sliding(const char* input_path, const char* output_path)
 
     cap.release();
     writer.release();
-    std::cout << "All frames processed and saved to " << output_path << "\n";
+    std::cout << "saved to " << output_path << "\n";
 }
 
 void usage(const char* prog_name)
@@ -614,6 +611,15 @@ void usage(const char* prog_name)
 }
 
 #include "./test_conv.cpp"
+
+// void test_conv3d()
+// {
+//     std::cout << "---------------------------------------------------------------\n";
+//     auto k3d = KERNEL3D_EDGE_DETECTOR;
+//     std::string out_3d_rgb = base + "_3d_rgb" + ext;
+//     HandleMP4_3D_RGB_Sliding(input_path, out_3d_rgb.c_str(), k3d);
+//     std::cout << "---------------------------------------------------------------\n";
+// }
 
 int main(int argc, char* argv[])
 {
@@ -683,18 +689,11 @@ int main(int argc, char* argv[])
         size_t dot = out_arg.rfind('.');
         std::string base = (dot == std::string::npos) ? out_arg : out_arg.substr(0, dot);
         std::string ext = (dot == std::string::npos) ? std::string() : out_arg.substr(dot);
-
-        std::string out_2d = base + "_2d" + ext;
-        std::string out_3d_gray = base + "_3d_gray" + ext;
-        std::string out_3d_rgb = base + "_3d_rgb" + ext;
-
-        // std::cout << "---------------------------------------------------------------\n";
-        // std::cout << "Running 2D per-frame convolution -> " << out_2d << "\n";
-        // HandleMP4_2D(input_path, out_2d.c_str());
-        // std::cout << "---------------------------------------------------------------\n";
-                
+        
         std::cout << "---------------------------------------------------------------\n";
-        HandleMP4_3D_RGB_Sliding(input_path, out_3d_rgb.c_str());
+        auto k3d = KERNEL3D_EDGE_DETECTOR;
+        std::string out_3d_rgb = base + "_3d_rgb" + ext;
+        HandleMP4_3D_RGB_Sliding(input_path, out_3d_rgb.c_str(), k3d);
         std::cout << "---------------------------------------------------------------\n";
     }
     else 
