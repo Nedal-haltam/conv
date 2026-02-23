@@ -1,4 +1,4 @@
-void test_conv2d()
+void test_conv2d_numerical()
 {
     const int w = 5, h = 5;
     int in[h][w];
@@ -52,7 +52,7 @@ void test_conv2d()
     }
 }
 
-void test_conv3d()
+void test_conv3d_numerical()
 {
     const int w = 5, h = 5, d = 5;
     int in[d][h][w];
