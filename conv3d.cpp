@@ -1,4 +1,5 @@
 #include <vector>
+#include <opencv2/opencv.hpp>
 
 float clampf(float val) {
     if (val < 0.0f) return 0.0f;
@@ -6,7 +7,7 @@ float clampf(float val) {
     return val;
 }
 
-extern "C" void conv3d(float** inputs, float* kernel, float* output, int width, int height, int depth, int kw, int kh, int kd, int cs)
+extern "C" void conv3d_old(float** inputs, float* kernel, float* output, int width, int height, int depth, int kw, int kh, int kd, int cs)
 {
     int padH = kh / 2;
     int padW = kw / 2;
@@ -48,5 +49,38 @@ extern "C" void conv3d(float** inputs, float* kernel, float* output, int width, 
                 output[out_idx_start + c] = clampf(sum[c]);
             }
         }
+    }
+}
+
+extern "C" void conv3d(float** inputs, float* kernel, float* output, int width, int height, int depth, int kw, int kh, int kd, int cs, int tc)
+{
+    cv::Mat out_mat(height, width, CV_MAKETYPE(CV_32F, cs), output);
+    out_mat.setTo(cv::Scalar::all(0));
+
+    #pragma omp parallel for num_threads(tc) collapse(3)
+    for (int dz = 0; dz < kd; ++dz)
+    {
+        cv::Mat frame(height, width, CV_MAKETYPE(CV_32F, cs), inputs[dz]);
+        cv::Mat k_slice(kh, kw, CV_32F, kernel + (dz * kw * kh));
+        cv::Mat filtered;
+        cv::filter2D(frame, filtered, CV_32F, k_slice, cv::Point(-1, -1), 0.0, cv::BORDER_CONSTANT);
+        out_mat += filtered;
+    }
+
+    cv::threshold(out_mat, out_mat, 0.0, 0.0, cv::THRESH_TOZERO);
+    cv::threshold(out_mat, out_mat, 255.0, 255.0, cv::THRESH_TRUNC);
+
+    int padH = kh / 2;
+    int padW = kw / 2;
+
+    if (padH > 0)
+    {
+        out_mat.rowRange(0, padH).setTo(cv::Scalar::all(0));
+        out_mat.rowRange(height - padH, height).setTo(cv::Scalar::all(0));
+    }
+    if (padW > 0)
+    {
+        out_mat.colRange(0, padW).setTo(cv::Scalar::all(0));
+        out_mat.colRange(width - padW, width).setTo(cv::Scalar::all(0));
     }
 }
