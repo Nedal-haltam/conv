@@ -1,5 +1,6 @@
 from __future__ import annotations
 import math
+import shutil
 import os
 import sys
 import time
@@ -381,8 +382,8 @@ def test_perf():
     modes = list(ConvMode)
     results = {mode: {dim: [] for dim in dims} for mode in modes}
     cs = 3
-    w = 640
-    h = 480
+    w = 320
+    h = 240
     test_frames = [np.random.rand(h, w, cs).astype(np.float32) * 255 for _ in range(max(dims))]
     for dim in dims:
         test_kernel = generate_3d_prewitt_z(dim, normalize=False)
@@ -390,6 +391,10 @@ def test_perf():
         for tc in tc_values:
             for mode in modes:
                 print(f"dim: {dim}, thread count: {tc}, Testing mode: {mode.name}")
+                if tc > 1 and mode in [ConvMode.PY_NESTED_LOOPS]:
+                    print(f"Skipping {mode.name} for thread count {tc} since it's not designed for multi-threading.")
+                    results[mode][dim].append(results[mode][dim][0])
+                    continue
                 start_time = time.time()
                 conv3d__(test_frames, test_kernel, cs, tc, mode)
                 end_time = time.time()
@@ -397,6 +402,10 @@ def test_perf():
                 # elapsed_time = conv3d_on_video("./input_videos/sample.mp4", "./output_videos/perf_test.mp4", k3d, False, tc, mode)
                 results[mode][dim].append(elapsed_time)
 
+    if os.path.exists('./metrics'): shutil.rmtree('./metrics')
+    os.makedirs('./metrics/mode-based', exist_ok=True)
+    os.makedirs('./metrics/dimension-based', exist_ok=True)
+    os.makedirs('./metrics/thread-count-based', exist_ok=True)
     for mode in modes:
         plt.figure(figsize=(10, 6))
         for dim in dims:
@@ -408,10 +417,13 @@ def test_perf():
         plt.grid()
         plt.legend()
         plt.savefig(f'./metrics/mode-based/{mode.name}.png')
+        plt.close()
 
+    alone_list = [ConvMode.PY_NESTED_LOOPS, ConvMode.PY_SCIPY_CONV]
     for dim in dims:
         plt.figure(figsize=(10, 6))
         for mode in modes:
+            if mode in alone_list: continue
             plt.plot(tc_values, results[mode][dim], label=f'{mode.name}', marker='o')
         plt.title(f'Performance Comparison for Kernel Dim {dim}x{dim}x{dim}')
         plt.xlabel('Thread Count')
@@ -420,10 +432,25 @@ def test_perf():
         plt.grid()
         plt.legend()
         plt.savefig(f'./metrics/dimension-based/{dim}.png')
+        plt.close()
+
+        for mode in alone_list:
+            plt.figure(figsize=(10, 6))
+            plt.plot(tc_values, results[mode][dim], label=f'{mode.name}', marker='o')
+            plt.title(f'Performance of {mode.name} for Kernel Dim {dim}x{dim}x{dim}')
+            plt.xlabel('Thread Count')
+            plt.ylabel('Time (seconds)')
+            plt.xticks(tc_values)
+            plt.grid()
+            plt.legend()
+            os.makedirs(f'./metrics/dimension-based/alone/{mode.name}', exist_ok=True)
+            plt.savefig(f'./metrics/dimension-based/alone/{mode.name}/{dim}.png')
+            plt.close()
 
     for tc in tc_values:
         plt.figure(figsize=(10, 6))
         for mode in modes:
+            if mode in alone_list: continue
             times_for_tc = [results[mode][dim][tc - 1] for dim in dims]
             plt.plot(dims, times_for_tc, label=f'{mode.name}', marker='o')
         plt.title(f'Performance Comparison for Thread Count {tc}')
@@ -433,6 +460,21 @@ def test_perf():
         plt.grid()
         plt.legend()
         plt.savefig(f'./metrics/thread-count-based/{tc}.png')
+        plt.close()
+
+        for mode in alone_list:
+            plt.figure(figsize=(10, 6))
+            times_for_tc = [results[mode][dim][tc - 1] for dim in dims]
+            plt.plot(dims, times_for_tc, label=f'{mode.name}', marker='o')
+            plt.title(f'Performance of {mode.name} for Thread Count {tc}')
+            plt.xlabel('Kernel Dimension')
+            plt.ylabel('Time (seconds)')
+            plt.xticks(dims)
+            plt.grid()
+            plt.legend()
+            os.makedirs(f'./metrics/thread-count-based/alone/{mode.name}', exist_ok=True)
+            plt.savefig(f'./metrics/thread-count-based/alone/{mode.name}/{tc}.png')
+            plt.close()
 
 def main():
     parser = argparse.ArgumentParser(description="Run 3D Convolution on Video")
