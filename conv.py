@@ -108,7 +108,6 @@ def conv3d_pytorch(frames, k3d, cs):
 def conv3d__(
     frames: List[npt.NDArray[np.float32]],
     k3d: npt.NDArray[np.float32],
-    cs: int,
     tc: int,
     mode: ConvMode
 ) -> List[npt.NDArray[np.float32]]:
@@ -117,6 +116,7 @@ def conv3d__(
     w = frames[0].shape[1]
     h = frames[0].shape[0]
     d = len(frames)
+    cs = frames[0].shape[2]
     
     out_frames = np.zeros((d, h, w, cs), dtype=np.float32)
     k3d = np.flip(k3d, axis=(0, 1, 2))
@@ -236,16 +236,17 @@ def conv3d(
     tc,
     mode: ConvMode) -> npt.NDArray[np.uint8]:
 
-    cs : int = 3
     w = all_frames[0].shape[1]
     h = all_frames[0].shape[0]
+    d = len(all_frames)
+    cs = all_frames[0].shape[2]
     kd, kh, kw = k3d.shape
 
     frames = all_frames[idx:idx+k3d.shape[0]]
     if len(frames) < k3d.shape[0]:
         frames += [np.zeros((h, w, cs), dtype=np.float32)] * (k3d.shape[0] - len(frames))
 
-    out_frame = conv3d__(frames, k3d, cs, tc, mode)
+    out_frame = conv3d__(frames, k3d, tc, mode)
 
     # padH = kh // 2
     # padW = kw // 2
@@ -381,7 +382,7 @@ def test_functionality():
     for m in modes:
         print(f"Testing mode: {m.name}")
         start_time = time.time()
-        result = conv3d__(test_frames, test_kernel, cs, tc, m)
+        result = conv3d__(test_frames, test_kernel, tc, m)
         end_time = time.time()
         elapsed_time = end_time - start_time
         times_taken[m] = elapsed_time
@@ -391,7 +392,7 @@ def test_functionality():
         if not np.allclose(results[modes[0]], results[modes[i]], atol=eps):
             return False
 
-    print('the result:\n')
+    print('the result:')
     res = results[modes[0]]
     w = res[0].shape[1]
     h = res[0].shape[0]
@@ -428,13 +429,13 @@ def test_perf():
     tc_values = list(range(1, (2 * os.cpu_count()) + 1))
     modes = list(ConvMode)
     results = {mode: {dim: [] for dim in dims} for mode in modes}
-    cs = 3
-    w = 320
-    h = 240
-    test_frames = [np.random.rand(h, w, cs).astype(np.float32) * 255 for _ in range(max(dims))]
+    cs = 1
+    w = 100
+    h = 100
+    d = 100
+    test_frames = [np.random.rand(h, w, cs).astype(np.float32) * 255 for _ in range(d)]
     for dim in dims:
         test_kernel = generate_3d_prewitt_z(dim, normalize=False)
-        k3d = generate_3d_prewitt_z(dim, normalize=False)
         for tc in tc_values:
             for mode in modes:
                 print(f"dim: {dim}, thread count: {tc}, Testing mode: {mode.name}")
@@ -443,7 +444,7 @@ def test_perf():
                     results[mode][dim].append(results[mode][dim][0])
                     continue
                 start_time = time.time()
-                conv3d__(test_frames, test_kernel, cs, tc, mode)
+                conv3d__(test_frames, test_kernel, tc, mode)
                 end_time = time.time()
                 elapsed_time = end_time - start_time
                 # elapsed_time = conv3d_on_video("./input_videos/sample.mp4", "./output_videos/perf_test.mp4", k3d, False, tc, mode)
