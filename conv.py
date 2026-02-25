@@ -14,9 +14,6 @@ from scipy.ndimage import convolve
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 import enum
-
-from zmq import device
-
 try: import torch
 except ImportError: pass
 
@@ -84,6 +81,7 @@ def get_conv3d_func(dll_path: str, func_name: str):
 
 def conv3d_pytorch(frames, k3d, cs):
     fd = len(frames)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     stacked_frames = np.stack(frames, axis=0)
     
     # Shape: (1_batch, Channels, Depth, Height, Width)
@@ -113,7 +111,7 @@ def conv3d__(
     cs: int,
     tc: int,
     mode: ConvMode
-) -> List[npt.NDArray[np.uint8]]:
+) -> List[npt.NDArray[np.float32]]:
     
     kd, kh, kw = k3d.shape
     w = frames[0].shape[1]
@@ -121,11 +119,12 @@ def conv3d__(
     d = len(frames)
     
     out_frames = np.zeros((d, h, w, cs), dtype=np.float32)
+    k3d = np.flip(k3d, axis=(0, 1, 2))
     
     padD = kd // 2
     padH = kh // 2
     padW = kw // 2
-    
+
     if mode == ConvMode.PY_NESTED_LOOPS:
         for z in range(d):
             for y in range(h):
@@ -190,12 +189,13 @@ def conv3d__(
                 z_in = z + dz - padD
                 if 0 <= z_in < d:
                     k_flipped = cv2.flip(k3d[kd - 1 - dz], -1)
-                    out_frames[z] += cv2.filter2D(
+                    filtered = cv2.filter2D(
                         frames[z_in], 
                         cv2.CV_32F, 
                         k_flipped, 
                         borderType=cv2.BORDER_CONSTANT
                     )
+                    out_frames[z] += filtered.reshape(h, w, cs)
 
     elif mode == ConvMode.PY_OCV_FILT2D_MT:
         def process_single_out_frame(z):
@@ -204,7 +204,13 @@ def conv3d__(
                 z_in = z + dz - padD
                 if 0 <= z_in < d:
                     k_flipped = cv2.flip(k3d[kd - 1 - dz], -1)
-                    acc += cv2.filter2D(frames[z_in], cv2.CV_32F, k_flipped, borderType=cv2.BORDER_CONSTANT)
+                    filtered = cv2.filter2D(
+                        frames[z_in], 
+                        cv2.CV_32F, 
+                        k_flipped, 
+                        borderType=cv2.BORDER_CONSTANT
+                    )
+                    acc += filtered.reshape(h, w, cs)
             return z, acc
 
         with ThreadPoolExecutor(max_workers=tc) as pool:
@@ -219,9 +225,8 @@ def conv3d__(
 
     else:
         raise ValueError("Invalid convolution mode specified.")
-    
-    clipped = np.clip(out_frames, 0, 255).astype(np.uint8)
-    return [clipped[i] for i in range(d)]
+
+    return [out_frames[i] for i in range(d)]
 
 def conv3d(
     idx: int,
@@ -350,13 +355,25 @@ def generate_3d_prewitt_z(size: int, normalize: bool = True) -> np.ndarray:
     return K
 
 def test_functionality():
-    cs = 3
-    w = 640
-    h = 480
+    w = 5
+    h = 5
+    d = 5
+    cs = 1
     tc = 1
     dim = 3
-    test_frames = [np.random.rand(h, w, cs).astype(np.float32) * 255 for _ in range(dim)]
-    test_kernel = generate_3d_prewitt_z(dim, normalize=False)
+    test_frames = []
+    for i in range(d):
+        frame = np.zeros((h, w, cs), dtype=np.float32)
+        for c in range(cs):
+            for y in range(h):
+                for x in range(w):
+                    frame[y, x, c] = i * h * w * cs + c * h * w + y * w + x + 1
+        test_frames.append(frame)
+    test_kernel = np.zeros((dim, dim, dim), dtype=np.float32)
+    for z in range(dim):
+        for y in range(dim):
+            for x in range(dim):
+                test_kernel[z, y, x] = z * dim * dim + y * dim + x + 1
     modes = list(ConvMode)
     results = {}
     eps = 1e-3
@@ -373,8 +390,18 @@ def test_functionality():
     for i in range(1, len(modes)):
         if not np.allclose(results[modes[0]], results[modes[i]], atol=eps):
             return False
-    print('the result:\n', results[modes[0]])
-    print('-' * 30)
+
+    print('the result:\n')
+    res = results[modes[0]]
+    w = res[0].shape[1]
+    h = res[0].shape[0]
+    d = len(res)
+    for z in range(d):
+        for y in range(h):
+            for x in range(w):
+                print(f"{res[z][y, x, 0]:<10.2f}", end=' ')
+            print()
+        print('-' * 30)
     return True
 
 def test_video(input_path, output_path, k3d):
