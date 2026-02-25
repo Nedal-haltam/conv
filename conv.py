@@ -424,9 +424,14 @@ def test_video(input_path, output_path, k3d):
         for future in futures: future.result()
     return
 
+
+def clear_dir_content(path):
+    if os.path.exists(path): shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+
 def test_perf():
     dims = [3, 5, 7, 9]
-    tc_values = list(range(1, (2 * os.cpu_count()) + 1))
+    tc_values = list(range(1, (1 * os.cpu_count()) + 1))
     modes = list(ConvMode)
     results = {mode: {dim: [] for dim in dims} for mode in modes}
     cs = 1
@@ -450,10 +455,42 @@ def test_perf():
                 # elapsed_time = conv3d_on_video("./input_videos/sample.mp4", "./output_videos/perf_test.mp4", k3d, False, tc, mode)
                 results[mode][dim].append(elapsed_time)
 
-    if os.path.exists('./metrics'): shutil.rmtree('./metrics')
-    os.makedirs('./metrics/mode-based', exist_ok=True)
-    os.makedirs('./metrics/dimension-based', exist_ok=True)
-    os.makedirs('./metrics/thread-count-based', exist_ok=True)
+    clear_dir_content('./metrics')
+
+    dim_tc_mode : str = ''
+    for dim in dims:
+        dim_tc_mode += f"Kernel Dim({dim}x{dim}x{dim}):\n"
+        for tc in tc_values:
+            dim_tc_mode += f'{' ' * 4}tc={tc}:\n'
+            sorted_modes = sorted(modes, key=lambda m: results[m][dim][tc - 1])
+            for mode in sorted_modes:
+                dim_tc_mode += f"{' ' * 8}{mode.name}: {results[mode][dim][tc - 1]:.3f}s\n"
+    with open('./metrics/dim_tc_mode.txt', 'w') as f:
+        f.write(dim_tc_mode)
+
+    mode_dim_tc : str = ''
+    mode_times = {}
+    for mode in modes: mode_times[mode] = sum(results[mode][dim][tc - 1] for dim in dims for tc in tc_values)
+    sorted_modes = sorted(modes, key=lambda m: mode_times[m])
+    for mode in sorted_modes:
+        mode_dim_tc += f"Mode: {mode.name}\n"
+        for dim in dims:
+            mode_dim_tc += f'{" " * 4}Kernel Dim({dim}x{dim}x{dim}):\n'
+            for tc in tc_values:
+                mode_dim_tc += f"{' ' * 8}tc={tc}: {results[mode][dim][tc - 1]:.3f}s\n"
+
+    with open('./metrics/mode_dim_tc.txt', 'w') as f:
+        f.write(mode_dim_tc)
+
+    return
+
+    alone_list = [ConvMode.PY_NESTED_LOOPS, ConvMode.PY_SCIPY_CONV]
+    clear_dir_content('./metrics/mode-based')
+    clear_dir_content('./metrics/dimension-based')
+    clear_dir_content('./metrics/thread-count-based')
+    for mode in alone_list:
+        clear_dir_content(f'./metrics/dimension-based/alone/{mode.name}')
+        clear_dir_content(f'./metrics/thread-count-based/alone/{mode.name}')
     for mode in modes:
         plt.figure(figsize=(10, 6))
         for dim in dims:
@@ -467,7 +504,7 @@ def test_perf():
         plt.savefig(f'./metrics/mode-based/{mode.name}.png')
         plt.close()
 
-    alone_list = [ConvMode.PY_NESTED_LOOPS, ConvMode.PY_SCIPY_CONV]
+
     for dim in dims:
         plt.figure(figsize=(10, 6))
         for mode in modes:
@@ -491,7 +528,6 @@ def test_perf():
             plt.xticks(tc_values)
             plt.grid()
             plt.legend()
-            os.makedirs(f'./metrics/dimension-based/alone/{mode.name}', exist_ok=True)
             plt.savefig(f'./metrics/dimension-based/alone/{mode.name}/{dim}.png')
             plt.close()
 
@@ -520,7 +556,6 @@ def test_perf():
             plt.xticks(dims)
             plt.grid()
             plt.legend()
-            os.makedirs(f'./metrics/thread-count-based/alone/{mode.name}', exist_ok=True)
             plt.savefig(f'./metrics/thread-count-based/alone/{mode.name}/{tc}.png')
             plt.close()
 
