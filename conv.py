@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List
 import enum
 
+from zmq import device
+
 try: import torch
 except ImportError: pass
 
@@ -80,13 +82,15 @@ def get_conv3d_func(dll_path: str, func_name: str):
     return conv3d_func
 
 
-def conv3d_pytorch(frames, k3d, cs, kd):
-    device = torch.device('cpu') 
-    stacked_frames = np.stack(frames[:kd], axis=0)
+def conv3d_pytorch(frames, k3d, cs):
+    fd = len(frames)
+    stacked_frames = np.stack(frames, axis=0)
+    
+    # Shape: (1_batch, Channels, Depth, Height, Width)
     img_tensor = torch.from_numpy(stacked_frames).permute(3, 0, 1, 2).unsqueeze(0).to(device)
-
+    
+    # Flip kernel for true convolution matching
     k3d_flipped = np.flip(k3d, axis=(0, 1, 2)).copy()
-
     k_tensor = torch.from_numpy(k3d_flipped).unsqueeze(0).unsqueeze(0).to(device)
     k_tensor = k_tensor.repeat(cs, 1, 1, 1, 1)
 
@@ -98,8 +102,8 @@ def conv3d_pytorch(frames, k3d, cs, kd):
             groups=cs
         )
     
-    middle_frame_idx = kd // 2
-    out_numpy = out_tensor.squeeze(0).permute(1, 2, 3, 0)[middle_frame_idx].cpu().numpy()
+    # Remove batch dim and permute back to (Depth, Height, Width, Channels)
+    out_numpy = out_tensor.squeeze(0).permute(1, 2, 3, 0).cpu().numpy()
     
     return out_numpy
 
@@ -109,39 +113,44 @@ def conv3d__(
     cs: int,
     tc: int,
     mode: ConvMode
-):
+) -> List[npt.NDArray[np.uint8]]:
+    
     kd, kh, kw = k3d.shape
     w = frames[0].shape[1]
     h = frames[0].shape[0]
-    out_frame = np.zeros((h, w, cs), dtype=np.float32)
+    d = len(frames)
+    
+    out_frames = np.zeros((d, h, w, cs), dtype=np.float32)
+    
+    padD = kd // 2
+    padH = kh // 2
+    padW = kw // 2
     
     if mode == ConvMode.PY_NESTED_LOOPS:
-        padH = kh // 2
-        padW = kw // 2
-        for y in range(h):
-            for x in range(w):
-                for c in range(cs):
-                    accum = 0.0
-                    for dz in range(kd):
-                        for dy in range(kh):
-                            for dx in range(kw):
-                                y_in = y + dy - padH
-                                x_in = x + dx - padW
-                                if 0 <= y_in < h and 0 <= x_in < w:
-                                    pixel_val = frames[dz][y_in, x_in, c]
-                                    k_dz = kd - 1 - dz
-                                    k_dy = kh - 1 - dy
-                                    k_dx = kw - 1 - dx
-                                    kernel_val = k3d[k_dz, k_dy, k_dx]
-                                    accum += pixel_val * kernel_val
-                    out_frame[y, x, c] = accum
+        for z in range(d):
+            for y in range(h):
+                for x in range(w):
+                    for c in range(cs):
+                        accum = 0.0
+                        for dz in range(kd):
+                            for dy in range(kh):
+                                for dx in range(kw):
+                                    z_in = z + dz - padD
+                                    y_in = y + dy - padH
+                                    x_in = x + dx - padW
+                                    
+                                    if 0 <= z_in < d and 0 <= y_in < h and 0 <= x_in < w:
+                                        pixel_val = frames[z_in][y_in, x_in, c]
+                                        k_dz = kd - 1 - dz
+                                        k_dy = kh - 1 - dy
+                                        k_dx = kw - 1 - dx
+                                        accum += pixel_val * k3d[k_dz, k_dy, k_dx]
+                        out_frames[z, y, x, c] = accum
+
     elif mode == ConvMode.PY_NESTED_LOOPS_VECTORIZED:
-        padH = kh // 2
-        padW = kw // 2
-        padded_frames = [
-            np.pad(f, ((padH, padH), (padW, padW), (0, 0)), mode='constant', constant_values=0.0) 
-            for f in frames
-        ]
+        stacked = np.stack(frames, axis=0)
+        padded = np.pad(stacked, ((padD, padD), (padH, padH), (padW, padW), (0, 0)), mode='constant', constant_values=0.0)
+        
         for dz in range(kd):
             for dy in range(kh):
                 for dx in range(kw):
@@ -149,60 +158,70 @@ def conv3d__(
                     k_dy = kh - 1 - dy
                     k_dx = kw - 1 - dx
                     weight = k3d[k_dz, k_dy, k_dx]
-                    # Slice the padded image to get a view exactly the size of the original frame (h x w).
-                    # By shifting the start index (dy, dx), we effectively shift the entire image.
-                    shifted_view = padded_frames[dz][dy : dy + h, dx : dx + w, :]
-                    # Multiply the entire shifted image by the single weight and accumulate
-                    out_frame += shifted_view * weight
+                    
+                    if weight == 0.0: continue
+                    
+                    shifted_view = padded[dz : dz + d, dy : dy + h, dx : dx + w, :]
+                    out_frames += shifted_view * weight
+
     elif mode == ConvMode.PY_SCIPY_CONV:
         stacked = np.stack(frames, axis=0)
         for c in range(cs):
-            out_frame[:, :, c] = convolve(
+            out_frames[:, :, :, c] = convolve(
                 stacked[:, :, :, c],
                 k3d,
                 mode='constant',
                 cval=0.0
-            )[kd // 2]
+            )
+
     elif mode == ConvMode.PY_SCIPY_CONV_MT:
+        stacked = np.stack(frames, axis=0)
         with ThreadPoolExecutor(max_workers=tc) as pool:
             futures = [
-                pool.submit(
-                    convolve,
-                    frames[i][:, :, c],
-                    k3d[kd - 1 - i],
-                    mode='constant',
-                    cval=0.0
-                )
+                pool.submit(convolve, stacked[:, :, :, c], k3d, mode='constant', cval=0.0)
                 for c in range(cs)
-                for i in range(kd)
             ]
-            results = [f.result() for f in futures]
-        idx = 0
-        for c in range(cs):
-            for i in range(kd):
-                out_frame[:, :, c] += results[idx]
-                idx += 1
+            for c, f in enumerate(futures):
+                out_frames[:, :, :, c] = f.result()
+
     elif mode == ConvMode.PY_OCV_FILT2D:
-        for z in range(kd):
-            k_flipped = cv2.flip(k3d[kd - 1 - z], -1)
-            out_frame += cv2.filter2D(
-                frames[z], 
-                cv2.CV_32F, 
-                k_flipped, 
-                borderType=cv2.BORDER_CONSTANT
-            )
+        for z in range(d):
+            for dz in range(kd):
+                z_in = z + dz - padD
+                if 0 <= z_in < d:
+                    k_flipped = cv2.flip(k3d[kd - 1 - dz], -1)
+                    out_frames[z] += cv2.filter2D(
+                        frames[z_in], 
+                        cv2.CV_32F, 
+                        k_flipped, 
+                        borderType=cv2.BORDER_CONSTANT
+                    )
+
     elif mode == ConvMode.PY_OCV_FILT2D_MT:
+        def process_single_out_frame(z):
+            acc = np.zeros((h, w, cs), dtype=np.float32)
+            for dz in range(kd):
+                z_in = z + dz - padD
+                if 0 <= z_in < d:
+                    k_flipped = cv2.flip(k3d[kd - 1 - dz], -1)
+                    acc += cv2.filter2D(frames[z_in], cv2.CV_32F, k_flipped, borderType=cv2.BORDER_CONSTANT)
+            return z, acc
+
         with ThreadPoolExecutor(max_workers=tc) as pool:
-            futures = [pool.submit(cv2.filter2D, frames[z], cv2.CV_32F, cv2.flip(k3d[kd - 1 - z], -1), borderType=cv2.BORDER_CONSTANT) for z in range(kd)]
-            for result in futures:
-                out_frame += result.result()
+            futures = [pool.submit(process_single_out_frame, z) for z in range(d)]
+            for f in futures:
+                z_idx, acc_frame = f.result()
+                out_frames[z_idx] = acc_frame
+
     elif mode == ConvMode.PY_TORCH_CONV3D:
-        if 'torch' not in sys.modules: raise ImportError("PyTorch is not installed. Please install it to use the PY_TORCH_CONV3D mode.")
-        out_frame = conv3d_pytorch(frames, k3d, cs, kd)
+        if 'torch' not in sys.modules: raise ImportError("PyTorch not installed.")
+        out_frames = conv3d_pytorch(frames, k3d, cs)
+
     else:
         raise ValueError("Invalid convolution mode specified.")
     
-    return out_frame
+    clipped = np.clip(out_frames, 0, 255).astype(np.uint8)
+    return [clipped[i] for i in range(d)]
 
 def conv3d(
     idx: int,
