@@ -373,7 +373,8 @@ def test_functionality():
     for i in range(1, len(modes)):
         if not np.allclose(results[modes[0]], results[modes[i]], atol=eps):
             return False
-
+    print('the result:\n', results[modes[0]])
+    print('-' * 30)
     return True
 
 def test_video(input_path, output_path, k3d):
