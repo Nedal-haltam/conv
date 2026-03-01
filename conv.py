@@ -439,12 +439,13 @@ def test_perf():
     h = 100
     d = 100
     test_frames = [np.random.rand(h, w, cs).astype(np.float32) * 255 for _ in range(d)]
+    non_mt_modes = [ConvMode.PY_NESTED_LOOPS, ConvMode.PY_NESTED_LOOPS_VECTORIZED, ConvMode.PY_SCIPY_CONV, ConvMode.PY_OCV_FILT2D, ConvMode.PY_TORCH_CONV3D]
     for dim in dims:
         test_kernel = generate_3d_prewitt_z(dim, normalize=False)
         for tc in tc_values:
             for mode in modes:
                 print(f"dim: {dim}, thread count: {tc}, Testing mode: {mode.name}")
-                if tc > 1 and mode in [ConvMode.PY_NESTED_LOOPS]:
+                if tc > 1 and mode in non_mt_modes:
                     print(f"Skipping {mode.name} for thread count {tc} since it's not designed for multi-threading.")
                     results[mode][dim].append(results[mode][dim][0])
                     continue
@@ -470,7 +471,7 @@ def test_perf():
 
     mode_dim_tc : str = ''
     mode_times = {}
-    for mode in modes: mode_times[mode] = sum(results[mode][dim][tc - 1] for dim in dims for tc in tc_values)
+    for mode in modes: mode_times[mode] = sum(results[mode][dim][0] for dim in dims)# for tc in tc_values)
     sorted_modes = sorted(modes, key=lambda m: mode_times[m])
     for mode in sorted_modes:
         mode_dim_tc += f"Mode: {mode.name}\n"
@@ -481,8 +482,6 @@ def test_perf():
 
     with open('./metrics/mode_dim_tc.txt', 'w') as f:
         f.write(mode_dim_tc)
-
-    return
 
     alone_list = [ConvMode.PY_NESTED_LOOPS, ConvMode.PY_SCIPY_CONV]
     clear_dir_content('./metrics/mode-based')
