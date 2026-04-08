@@ -433,11 +433,12 @@ def test_perf():
     dims = [3, 5, 7, 9]
     tc_values = list(range(1, (1 * os.cpu_count()) + 1))
     modes = list(ConvMode)
+    modes.remove(ConvMode.PY_TORCH_CONV3D) if 'torch' not in sys.modules else None
     results = {mode: {dim: [] for dim in dims} for mode in modes}
-    cs = 1
-    w = 100
-    h = 100
-    d = 100
+    cs = 3
+    w = 40
+    h = 40
+    d = 40
     test_frames = [np.random.rand(h, w, cs).astype(np.float32) * 255 for _ in range(d)]
     non_mt_modes = [ConvMode.PY_NESTED_LOOPS, ConvMode.PY_NESTED_LOOPS_VECTORIZED, ConvMode.PY_SCIPY_CONV, ConvMode.PY_OCV_FILT2D, ConvMode.PY_TORCH_CONV3D]
     for dim in dims:
